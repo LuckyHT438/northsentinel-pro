@@ -55,6 +55,6 @@ def get_macro_context():
         bias = "⚪ Neutral"
     
     summary = " | ".join(signals[:4])
-    line = f"  🌐 Macro: {bias} | {summary}\n"
+    line = f"🌐 Macro: {bias} | {summary}\n"
     
     return {'line': line}
