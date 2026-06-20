@@ -16,7 +16,7 @@ def detect_institutional_flow(ticker):
     aggs = get_aggs_minute(ticker, limit=10)
     
     if aggs is None or len(aggs) < 5:
-        return {'flow': 'no_data', 'line': ''}
+        return {'flow': 'no_data', 'line': "  🏦 Flow: ⚪ No data available\n"}
     
     volumes = [bar.get('v', 0) for bar in aggs]
     avg_volume = sum(volumes) / len(volumes) if volumes else 0
@@ -27,7 +27,7 @@ def detect_institutional_flow(ticker):
     last_close = last.get('c', 0)
     
     if last_open == 0 or avg_volume == 0:
-        return {'flow': 'no_data', 'line': ''}
+        return {'flow': 'no_data', 'line': "  🏦 Flow: ⚪ No data available\n"}
     
     price_change = (last_close - last_open) / last_open * 100
     volume_ratio = last_volume / avg_volume if avg_volume > 0 else 0
@@ -60,10 +60,7 @@ def detect_institutional_flow(ticker):
         flow = "normal"
         comment = "⚪ Normal flow"
     
-    if flow == "no_data":
-        line = ""
-    else:
-        line = f"  🏦 Flow: {comment}\n"
+    line = f"  🏦 Flow: {comment}\n"
     
     return {
         'flow': flow,
