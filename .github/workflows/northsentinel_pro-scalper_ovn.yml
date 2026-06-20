@@ -22,4 +22,4 @@ jobs:
         env:
           TELEGRAM_PRO_TOKEN: ${{ secrets.TELEGRAM_PRO_TOKEN }}
           TELEGRAM_PRO_CHAT_ID: ${{ secrets.TELEGRAM_PRO_CHAT_ID }}
-        run: python pro_scalper.py
+        run: north-sentinel_pro-scalper_ovn.yml
