@@ -22,4 +22,5 @@ jobs:
         env:
           TELEGRAM_PRO_TOKEN: ${{ secrets.TELEGRAM_PRO_TOKEN }}
           TELEGRAM_PRO_CHAT_ID: ${{ secrets.TELEGRAM_PRO_CHAT_ID }}
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: python north-sentinel_pro.py
