@@ -1,4 +1,4 @@
-name: NorthSentinel Pro
+name: 🤖 NorthSentinel Pro
 
 on:
   workflow_dispatch:
