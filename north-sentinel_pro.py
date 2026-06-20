@@ -822,8 +822,8 @@ def main():
         print(f"⏰ Early close today (1:00 PM ET)")
     
     if jour >= 5:
-        print("⏰ Weekend - No execution")
-        return
+        print("🔧 Weekend — Manual run authorized")
+        # Continue execution without blocking
     
     # === MODE OVERNIGHT CHECK (15:45, Mon-Thu) ===
     if jour in [0,1,2,3] and heure == 15 and minute >= 45:
