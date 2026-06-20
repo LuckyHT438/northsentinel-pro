@@ -93,7 +93,7 @@ def calculate_confidence_score(stock_data, vol_profile, cum_delta, inst_flow):
     # --- Total /10 ---
     total = round(technical_score + volume_score + flow_score, 1)
     
-    # --- Interprétation — 5 niveaux ---
+    # --- Verdict — 5 niveaux ---
     if total >= 8.5:
         verdict = "Strong setup — 3 greens"
     elif total >= 7.5:
