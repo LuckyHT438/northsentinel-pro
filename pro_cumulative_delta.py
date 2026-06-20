@@ -14,7 +14,7 @@ def calculate_cumulative_delta(ticker):
     aggs = get_aggs_minute(ticker, limit=30)
     
     if aggs is None or len(aggs) < 5:
-        return {'delta': None, 'line': ''}
+        return {'delta': None, 'line': "  📊 CumDelta: ⚪ No data available\n"}
     
     delta = 0
     for bar in aggs:
@@ -23,19 +23,18 @@ def calculate_cumulative_delta(ticker):
         close_price = bar.get('c', 0)
         
         if close_price > open_price:
-            delta += volume      # Achat
+            delta += volume
         else:
-            delta -= volume      # Vente
+            delta -= volume
     
-    # Interprétation
     if delta > 5000:
-        comment = "🟢 Strong net buying"
+        comment = "🟢 Strong positive flow"
     elif delta > 1000:
-        comment = "🟡 Moderate buying"
+        comment = "🟡 Moderate positive flow"
     elif delta < -5000:
-        comment = "🔴 Strong net selling"
+        comment = "🔴 Strong negative flow"
     elif delta < -1000:
-        comment = "🟠 Moderate selling"
+        comment = "🟠 Moderate negative flow"
     else:
         comment = "⚪ Neutral flow"
     
