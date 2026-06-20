@@ -1,0 +1,25 @@
+name: NorthSentinel Pro Scalper & OVN
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-pro-scalper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Pro Scalper
+        env:
+          TELEGRAM_PRO_TOKEN: ${{ secrets.TELEGRAM_PRO_TOKEN }}
+          TELEGRAM_PRO_CHAT_ID: ${{ secrets.TELEGRAM_PRO_CHAT_ID }}
+        run: python pro_scalper.py
