@@ -6,12 +6,11 @@
 def calculate_confidence_score(stock_data, vol_profile, cum_delta, inst_flow):
     """
     Calcule une note de confiance /10 avec sous-scores.
-    Retourne un dict avec la note et la ligne Telegram.
+    Retourne un dict avec la note et le verdict.
     """
     technical_score = 0
     volume_score = 0
     flow_score = 0
-    components = []
     
     # --- 1. Score technique (gap + volume + news) — max 4 points ---
     score = stock_data.get('score', 0)
@@ -36,7 +35,6 @@ def calculate_confidence_score(stock_data, vol_profile, cum_delta, inst_flow):
         technical_score -= 0.5
     
     technical_score = max(0, min(4, technical_score))
-    components.append(f"Technical: {technical_score:.1f}/4")
     
     # --- 2. Volume Profile (VWAP/POC) — max 3 points ---
     if vol_profile and vol_profile.get('vwap') and vol_profile.get('poc'):
@@ -60,9 +58,6 @@ def calculate_confidence_score(stock_data, vol_profile, cum_delta, inst_flow):
             volume_score += 0
         
         volume_score = max(0, min(3, volume_score))
-        components.append(f"Volume Profile: {volume_score:.1f}/3")
-    else:
-        components.append("Volume Profile: N/A")
     
     # --- 3. Flow institutionnel (CumDelta + Flow) — max 3 points ---
     if cum_delta and cum_delta.get('delta') is not None:
@@ -94,32 +89,23 @@ def calculate_confidence_score(stock_data, vol_profile, cum_delta, inst_flow):
             flow_score += 0.5
     
     flow_score = max(0, min(3, flow_score))
-    components.append(f"Flow: {flow_score:.1f}/3")
     
     # --- Total /10 ---
     total = round(technical_score + volume_score + flow_score, 1)
     
-    # --- Interprétation ---
-    if total >= 7.5:
-        verdict = "🟢 High confidence"
+    # --- Interprétation — 5 niveaux ---
+    if total >= 8.5:
+        verdict = "Strong setup — 3 greens"
+    elif total >= 7.5:
+        verdict = "Favorable setup — 2 greens, 1 warning"
     elif total >= 5.5:
-        verdict = "🟡 Moderate confidence"
+        verdict = "Mixed setup — 2 greens, 1 warning — caution"
     elif total >= 3.5:
-        verdict = "🟠 Low confidence"
+        verdict = "Weak setup — unfavorable risk/reward"
     else:
-        verdict = "🔴 Weak — avoid"
-    
-    line = (
-        f"  🎯 Confidence: {total}/10 | {verdict}\n"
-        f"  └─ {components[0]} | {components[1] if len(components) > 1 else ''}"
-    )
-    if len(components) > 2:
-        line += f" | {components[2]}"
-    line += "\n"
+        verdict = "Poor setup — insufficient confidence"
     
     return {
         'total': total,
-        'verdict': verdict,
-        'components': components,
-        'line': line
+        'verdict': verdict
     }
