@@ -744,6 +744,10 @@ def main():
             message += (
                 f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b>\n"
                 f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
+            )
+            if vol_profile['line']:
+                message += vol_profile['line']
+            message += (
                 f"  💵 CUR. PRICE: ${b['price']}\n"
                 f"  🎯 ENTRY PRICE: ${buy_price}\n"
                 f"  📦 QTY TO BUY: {quantity} shares\n"
@@ -751,8 +755,6 @@ def main():
                 f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
                 f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
             )
-            if vol_profile['line']:
-                message += vol_profile['line']
         else:
             message += f"❌ No Valid Stock for Overnight\n"
             message += f"⏰ Until next time!\n"
@@ -772,6 +774,10 @@ def main():
             message += (
                 f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b>\n"
                 f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
+            )
+            if vol_profile_etf['line']:
+                message += vol_profile_etf['line']
+            message += (
                 f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
                 f"  🎯 ENTRY PRICE: ${buy_price}\n"
                 f"  📦 QTY TO BUY: {quantity} units\n"
@@ -779,8 +785,6 @@ def main():
                 f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
                 f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
             )
-            if vol_profile_etf['line']:
-                message += vol_profile_etf['line']
         else:
             message += f"❌ No Valid ETF for Overnight\n"
             message += f"⏰ Until next time!\n"
@@ -896,6 +900,10 @@ def main():
         message += (
             f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b>\n"
             f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
+        )
+        if vol_profile['line']:
+            message += vol_profile['line']
+        message += (
             f"  💵 CUR. PRICE: ${b['price']}\n"
             f"  🎯 ENTRY PRICE: ${buy_price}\n"
             f"  📦 QTY TO BUY: {quantity} shares\n"
@@ -903,8 +911,6 @@ def main():
             f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
             f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
         )
-        if vol_profile['line']:
-            message += vol_profile['line']
     else:
         message += f"❌ No Valid Stock Identified\n"
         message += f"⏰ Until next time!\n"
@@ -924,6 +930,10 @@ def main():
         message += (
             f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b>\n"
             f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
+        )
+        if vol_profile_etf['line']:
+            message += vol_profile_etf['line']
+        message += (
             f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
             f"  🎯 ENTRY PRICE: ${buy_price}\n"
             f"  📦 QTY TO BUY: {quantity} units\n"
@@ -931,8 +941,6 @@ def main():
             f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
             f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
         )
-        if vol_profile_etf['line']:
-            message += vol_profile_etf['line']
     else:
         message += f"❌ No Valid ETF Identified\n"
         message += f"⏰ Until next time!\n"
