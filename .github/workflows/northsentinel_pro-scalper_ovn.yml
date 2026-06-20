@@ -1,4 +1,4 @@
-name: NorthSentinel Pro Scalper & OVN
+name: Run Pro Scalper
 
 on:
   workflow_dispatch:
@@ -22,4 +22,4 @@ jobs:
         env:
           TELEGRAM_PRO_TOKEN: ${{ secrets.TELEGRAM_PRO_TOKEN }}
           TELEGRAM_PRO_CHAT_ID: ${{ secrets.TELEGRAM_PRO_CHAT_ID }}
-        run: north-sentinel_pro-scalper_ovn.yml
+        run: python north-sentinel_pro.py
