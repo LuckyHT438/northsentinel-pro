@@ -768,6 +768,7 @@ def main():
             stop = round(buy_price * 0.97, 2)
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+            vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
             message += (
                 f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b>\n"
                 f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
@@ -778,6 +779,8 @@ def main():
                 f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
                 f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
             )
+            if vol_profile_etf['line']:
+                message += vol_profile_etf['line']
         else:
             message += f"❌ No Valid ETF for Overnight\n"
             message += f"⏰ Until next time!\n"
@@ -917,6 +920,7 @@ def main():
         stop = round(buy_price * 0.97, 2)
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
         quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+        vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
         message += (
             f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b>\n"
             f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
@@ -927,6 +931,8 @@ def main():
             f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
             f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
         )
+        if vol_profile_etf['line']:
+            message += vol_profile_etf['line']
     else:
         message += f"❌ No Valid ETF Identified\n"
         message += f"⏰ Until next time!\n"
