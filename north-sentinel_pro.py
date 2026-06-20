@@ -14,8 +14,10 @@ import os
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# === MODULE PRO: VOLUME PROFILE ===
+# === MODULES PRO ===
 from pro_volume_profile import get_volume_profile
+from pro_cumulative_delta import calculate_cumulative_delta
+from pro_institutional_flow import detect_institutional_flow
 
 # Récupération depuis les secrets GitHub
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_PRO_TOKEN")
@@ -741,12 +743,18 @@ def main():
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
             vol_profile = get_volume_profile(b['ticker'], b['price'])
+            cum_delta = calculate_cumulative_delta(b['ticker'])
+            inst_flow = detect_institutional_flow(b['ticker'])
             message += (
                 f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b>\n"
                 f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
             )
             if vol_profile['line']:
                 message += vol_profile['line']
+            if cum_delta['line']:
+                message += cum_delta['line']
+            if inst_flow['line']:
+                message += inst_flow['line']
             message += (
                 f"  💵 CUR. PRICE: ${b['price']}\n"
                 f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -771,12 +779,18 @@ def main():
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
             vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
+            cum_delta_etf = calculate_cumulative_delta(b['ticker'])
+            inst_flow_etf = detect_institutional_flow(b['ticker'])
             message += (
                 f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b>\n"
                 f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
             )
             if vol_profile_etf['line']:
                 message += vol_profile_etf['line']
+            if cum_delta_etf['line']:
+                message += cum_delta_etf['line']
+            if inst_flow_etf['line']:
+                message += inst_flow_etf['line']
             message += (
                 f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
                 f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -897,12 +911,18 @@ def main():
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
         quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
         vol_profile = get_volume_profile(b['ticker'], b['price'])
+        cum_delta = calculate_cumulative_delta(b['ticker'])
+        inst_flow = detect_institutional_flow(b['ticker'])
         message += (
             f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b>\n"
             f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
         )
         if vol_profile['line']:
             message += vol_profile['line']
+        if cum_delta['line']:
+            message += cum_delta['line']
+        if inst_flow['line']:
+            message += inst_flow['line']
         message += (
             f"  💵 CUR. PRICE: ${b['price']}\n"
             f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -927,12 +947,18 @@ def main():
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
         quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
         vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
+        cum_delta_etf = calculate_cumulative_delta(b['ticker'])
+        inst_flow_etf = detect_institutional_flow(b['ticker'])
         message += (
             f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b>\n"
             f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
         )
         if vol_profile_etf['line']:
             message += vol_profile_etf['line']
+        if cum_delta_etf['line']:
+            message += cum_delta_etf['line']
+        if inst_flow_etf['line']:
+            message += inst_flow_etf['line']
         message += (
             f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
             f"  🎯 ENTRY PRICE: ${buy_price}\n"
