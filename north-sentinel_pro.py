@@ -668,7 +668,6 @@ def main():
         print("=" * 50)
         
         post_news_tomorrow, news_tomorrow = is_high_impact_news(for_tomorrow=True)
-        macro = get_macro_context()
         
         tickers_actions = get_all_tickers()
         print(f"\n🔍 Phase 1: Analyzing {len(tickers_actions)} stocks for Overnight...\n")
@@ -752,17 +751,17 @@ def main():
             
             # Verdict
             if confidence['total'] >= 8.5:
-                verdict_line = f"  ⚖️ VERDICT: <b>Strong setup</b> 🟢 — 3 greens\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢 — 3 greens\n"
             elif confidence['total'] >= 7.5:
-                verdict_line = f"  ⚖️ VERDICT: <b>Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
             elif confidence['total'] >= 5.5:
-                verdict_line = f"  ⚖️ VERDICT: <b>Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
             elif confidence['total'] >= 3.5:
-                verdict_line = f"  ⚖️ VERDICT: <b>Weak setup</b> 🟠 — unfavorable risk/reward\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠 — unfavorable risk/reward\n"
             else:
-                verdict_line = f"  ⚖️ VERDICT: <b>Poor setup</b> 🔴 — insufficient confidence\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴 — insufficient confidence\n"
             
-            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b> | 🎯 <b>{confidence['total']}/10</b>\n"
+            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b>\n"
             message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
             if sector_context['line']:
                 message += sector_context['line']
@@ -803,17 +802,17 @@ def main():
             sector_context_etf = get_macro_context(b['ticker'])
             
             if confidence_etf['total'] >= 8.5:
-                verdict_line = f"  ⚖️ VERDICT: <b>Strong setup</b> 🟢 — 3 greens\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢 — 3 greens\n"
             elif confidence_etf['total'] >= 7.5:
-                verdict_line = f"  ⚖️ VERDICT: <b>Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
             elif confidence_etf['total'] >= 5.5:
-                verdict_line = f"  ⚖️ VERDICT: <b>Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
             elif confidence_etf['total'] >= 3.5:
-                verdict_line = f"  ⚖️ VERDICT: <b>Weak setup</b> 🟠 — unfavorable risk/reward\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠 — unfavorable risk/reward\n"
             else:
-                verdict_line = f"  ⚖️ VERDICT: <b>Poor setup</b> 🔴 — insufficient confidence\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴 — insufficient confidence\n"
             
-            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b> | 🎯 <b>{confidence_etf['total']}/10</b>\n"
+            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b>\n"
             message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
             if sector_context_etf['line']:
                 message += sector_context_etf['line']
@@ -854,13 +853,12 @@ def main():
     current_score_min_fnb = SCORE_MIN_FNB + 1 if post_news else SCORE_MIN_FNB
     
     GAP_MIN = get_gap_min()
-    exit_time = get_exit_time()
     
     print("=" * 50)
     print(f"🤖 NorthSentinel Pro - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
     print(f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}% | Stock Score: {current_score_min_actions}/9 | ETF: {current_score_min_fnb}/5")
     if market_status == 'early_close':
-        print(f"⏰ EARLY CLOSE 1:00 PM ET - Exit: {exit_time}")
+        print(f"⏰ EARLY CLOSE 1:00 PM ET")
     print("=" * 50)
     
     tickers_actions = get_all_tickers()
@@ -948,17 +946,17 @@ def main():
         
         # Verdict
         if confidence['total'] >= 8.5:
-            verdict_line = f"  ⚖️ VERDICT: <b>Strong setup</b> 🟢 — 3 greens\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢 — 3 greens\n"
         elif confidence['total'] >= 7.5:
-            verdict_line = f"  ⚖️ VERDICT: <b>Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
         elif confidence['total'] >= 5.5:
-            verdict_line = f"  ⚖️ VERDICT: <b>Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
         elif confidence['total'] >= 3.5:
-            verdict_line = f"  ⚖️ VERDICT: <b>Weak setup</b> 🟠 — unfavorable risk/reward\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠 — unfavorable risk/reward\n"
         else:
-            verdict_line = f"  ⚖️ VERDICT: <b>Poor setup</b> 🔴 — insufficient confidence\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴 — insufficient confidence\n"
         
-        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b> | 🎯 <b>{confidence['total']}/10</b>\n"
+        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b>\n"
         message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
         if sector_context['line']:
             message += sector_context['line']
@@ -999,17 +997,17 @@ def main():
         sector_context_etf = get_macro_context(b['ticker'])
         
         if confidence_etf['total'] >= 8.5:
-            verdict_line = f"  ⚖️ VERDICT: <b>Strong setup</b> 🟢 — 3 greens\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢 — 3 greens\n"
         elif confidence_etf['total'] >= 7.5:
-            verdict_line = f"  ⚖️ VERDICT: <b>Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
         elif confidence_etf['total'] >= 5.5:
-            verdict_line = f"  ⚖️ VERDICT: <b>Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
         elif confidence_etf['total'] >= 3.5:
-            verdict_line = f"  ⚖️ VERDICT: <b>Weak setup</b> 🟠 — unfavorable risk/reward\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠 — unfavorable risk/reward\n"
         else:
-            verdict_line = f"  ⚖️ VERDICT: <b>Poor setup</b> 🔴 — insufficient confidence\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴 — insufficient confidence\n"
         
-        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b> | 🎯 <b>{confidence_etf['total']}/10</b>\n"
+        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b>\n"
         message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
         if sector_context_etf['line']:
             message += sector_context_etf['line']
