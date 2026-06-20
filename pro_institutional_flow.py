@@ -35,32 +35,32 @@ def detect_institutional_flow(ticker):
     volume_ratio = last_volume / avg_volume if avg_volume > 0 else 0
     
     # Détection
-    if volume_ratio > 2.0:
-        if -0.1 <= price_change <= 0.1:
-            flow = "absorption"
-            comment = "🟢 Absorption — institution accumulating"
-        elif price_change > 0.5:
-            flow = "breakout"
-            comment = "🟢 Breakout — institution pushing"
-        elif price_change < -0.3:
-            flow = "distribution"
-            comment = "🔴 Distribution — institution selling"
+        if volume_ratio > 2.0:
+            if -0.1 <= price_change <= 0.1:
+                flow = "absorption"
+                comment = "🟢 High volume — price stable"
+            elif price_change > 0.5:
+                flow = "breakout"
+                comment = "🟢 High volume — price rising"
+            elif price_change < -0.3:
+                flow = "distribution"
+                comment = "🔴 High volume — price declining"
+            else:
+                flow = "neutral"
+                comment = "⚪ High volume — no clear direction"
+        elif volume_ratio > 1.5:
+            if price_change > 0.3:
+                flow = "buying"
+                comment = "🟡 Volume rising — price up"
+            elif price_change < -0.2:
+                flow = "selling"
+                comment = "🟠 Volume rising — price down"
+            else:
+                flow = "neutral"
+                comment = "⚪ Normal flow"
         else:
-            flow = "neutral"
-            comment = "⚪ High volume, no clear direction"
-    elif volume_ratio > 1.5:
-        if price_change > 0.3:
-            flow = "buying"
-            comment = "🟡 Active buying"
-        elif price_change < -0.2:
-            flow = "selling"
-            comment = "🟠 Active selling"
-        else:
-            flow = "neutral"
+            flow = "normal"
             comment = "⚪ Normal flow"
-    else:
-        flow = "normal"
-        comment = "⚪ Normal flow"
     
     line = f"  🏦 Flow: {comment}\n" if flow != "normal" and flow != "no_data" else ""
     
