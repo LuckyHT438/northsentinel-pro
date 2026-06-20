@@ -18,6 +18,8 @@ from urllib3.util.retry import Retry
 from pro_volume_profile import get_volume_profile
 from pro_cumulative_delta import calculate_cumulative_delta
 from pro_institutional_flow import detect_institutional_flow
+from pro_confidence import calculate_confidence_score
+from pro_macro_context import get_macro_context
 
 # Récupération depuis les secrets GitHub
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_PRO_TOKEN")
@@ -666,6 +668,7 @@ def main():
         print("=" * 50)
         
         post_news_tomorrow, news_tomorrow = is_high_impact_news(for_tomorrow=True)
+        macro = get_macro_context()
         
         tickers_actions = get_all_tickers()
         print(f"\n🔍 Phase 1: Analyzing {len(tickers_actions)} stocks for Overnight...\n")
@@ -721,6 +724,8 @@ def main():
         message += f"<i>US/CA institutional-grade scalping & overnight hold signals. Manual execution. Post-market recap.</i>\n"
         message += f"📅 {now_mtl.strftime('%Y-%m-%d %H:%M')} (Montreal)\n"
         message += f"⏱️ Runtime: {elapsed:.1f}s\n"
+        if macro['line']:
+            message += macro['line']
         message += "═" * 35 + "\n"
         
         if post_news_tomorrow and news_tomorrow:
@@ -745,6 +750,7 @@ def main():
             vol_profile = get_volume_profile(b['ticker'], b['price'])
             cum_delta = calculate_cumulative_delta(b['ticker'])
             inst_flow = detect_institutional_flow(b['ticker'])
+            confidence = calculate_confidence_score(b, vol_profile, cum_delta, inst_flow)
             message += (
                 f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b>\n"
                 f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
@@ -755,6 +761,8 @@ def main():
                 message += cum_delta['line']
             if inst_flow['line']:
                 message += inst_flow['line']
+            if confidence['line']:
+                message += confidence['line']
             message += (
                 f"  💵 CUR. PRICE: ${b['price']}\n"
                 f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -781,6 +789,7 @@ def main():
             vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
             cum_delta_etf = calculate_cumulative_delta(b['ticker'])
             inst_flow_etf = detect_institutional_flow(b['ticker'])
+            confidence_etf = calculate_confidence_score(b, vol_profile_etf, cum_delta_etf, inst_flow_etf)
             message += (
                 f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b>\n"
                 f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
@@ -791,6 +800,8 @@ def main():
                 message += cum_delta_etf['line']
             if inst_flow_etf['line']:
                 message += inst_flow_etf['line']
+            if confidence_etf['line']:
+                message += confidence_etf['line']
             message += (
                 f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
                 f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -822,6 +833,7 @@ def main():
     
     GAP_MIN = get_gap_min()
     exit_time = get_exit_time()
+    macro = get_macro_context()
     
     print("=" * 50)
     print(f"🤖 NorthSentinel Pro - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
@@ -889,6 +901,8 @@ def main():
     if market_status == 'early_close':
         message += f"⚠️ EARLY CLOSE TODAY (1:00 PM ET)\n"
     message += f"⏱️ Runtime: {elapsed:.1f}s\n"
+    if macro['line']:
+        message += macro['line']
     message += "═" * 35 + "\n"
     
     if post_news and news_info:
@@ -913,6 +927,7 @@ def main():
         vol_profile = get_volume_profile(b['ticker'], b['price'])
         cum_delta = calculate_cumulative_delta(b['ticker'])
         inst_flow = detect_institutional_flow(b['ticker'])
+        confidence = calculate_confidence_score(b, vol_profile, cum_delta, inst_flow)
         message += (
             f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b>\n"
             f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
@@ -923,6 +938,8 @@ def main():
             message += cum_delta['line']
         if inst_flow['line']:
             message += inst_flow['line']
+        if confidence['line']:
+            message += confidence['line']
         message += (
             f"  💵 CUR. PRICE: ${b['price']}\n"
             f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -949,6 +966,7 @@ def main():
         vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
         cum_delta_etf = calculate_cumulative_delta(b['ticker'])
         inst_flow_etf = detect_institutional_flow(b['ticker'])
+        confidence_etf = calculate_confidence_score(b, vol_profile_etf, cum_delta_etf, inst_flow_etf)
         message += (
             f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/5</b>\n"
             f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
@@ -959,6 +977,8 @@ def main():
             message += cum_delta_etf['line']
         if inst_flow_etf['line']:
             message += inst_flow_etf['line']
+        if confidence_etf['line']:
+            message += confidence_etf['line']
         message += (
             f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
             f"  🎯 ENTRY PRICE: ${buy_price}\n"
