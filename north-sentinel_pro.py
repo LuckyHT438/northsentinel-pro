@@ -14,6 +14,9 @@ import os
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# === MODULE PRO: VOLUME PROFILE ===
+from pro_volume_profile import get_volume_profile
+
 # Récupération depuis les secrets GitHub
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_PRO_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_PRO_CHAT_ID")
@@ -35,9 +38,6 @@ PRICE_MAX_FNB = 9999
 
 # === CALENDRIER JOURS FÉRIÉS US/CANADA ===
 def is_market_closed(check_date=None):
-    """Vérifie si la bourse US ou canadienne est fermée (jour férié).
-    Retourne: 'closed' si fermé, 'early_close' si fermeture anticipée (13h), 'open' si ouvert"""
-    
     if check_date is None:
         check_date = datetime.now(MONTREAL_TZ).date()
     elif isinstance(check_date, datetime):
@@ -45,9 +45,7 @@ def is_market_closed(check_date=None):
     
     year = check_date.year
     
-    # --- Jours fériés US (NYSE/NASDAQ fermés) ---
     us_holidays = set()
-    
     us_holidays.add(date(year, 1, 1))
     us_holidays.add(date(year, 6, 19))
     us_holidays.add(date(year, 7, 4))
@@ -81,9 +79,7 @@ def is_market_closed(check_date=None):
     thanks = date(year, 11, thanks.day + 21)
     us_holidays.add(thanks)
     
-    # --- Jours fériés canadiens (TSX fermés) ---
     ca_holidays = set()
-    
     ca_holidays.add(date(year, 1, 1))
     ca_holidays.add(date(year, 7, 1))
     ca_holidays.add(date(year, 12, 25))
@@ -131,7 +127,6 @@ def is_market_closed(check_date=None):
     ca_thanks = date(year, 10, ca_thanks.day + 7)
     ca_holidays.add(ca_thanks)
     
-    # --- Fermetures anticipées (13h00) ---
     early_close_dates = set()
     early_close_dates.add(date(year, 7, 3))
     early_close_dates.add(date(year, 11, 28))
@@ -175,7 +170,6 @@ def create_session():
 
 HTTP_SESSION = create_session()
 
-# Set global pour les tickers canadiens (format .TO)
 canadian_symbols = {
     "TD.TO", "BMO.TO", "BNS.TO", "NA.TO",
     "ENB.TO", "SU.TO", "CNQ.TO", "SOBO.TO",
@@ -233,7 +227,6 @@ def get_exit_time():
     if is_market_closed() == 'early_close':
         exit_time = now_mtl.replace(hour=13, minute=0, second=0, microsecond=0)
         return exit_time.strftime('%H:%M')
-    
     if now_mtl.hour < 12:
         exit_time = now_mtl.replace(hour=11, minute=30, second=0, microsecond=0)
     else:
@@ -249,72 +242,44 @@ def get_gap_min():
 
 def get_tp_multiplier(score, gap, post_news=False):
     if score < 6:
-        if score == 5:
-            base = 1.010
-        else:
-            base = 1.005
-    elif gap >= 20:
-        base = 1.02 + (score - 4) * 0.006
-    elif gap >= 10:
-        base = 1.015 + (score - 4) * 0.004
-    else:
-        base = 1.005 + (score - 4) * 0.002
-    
-    if post_news:
-        base = round(1.0 + (base - 1.0) * 0.833, 3)
+        if score == 5: base = 1.010
+        else: base = 1.005
+    elif gap >= 20: base = 1.02 + (score - 4) * 0.006
+    elif gap >= 10: base = 1.015 + (score - 4) * 0.004
+    else: base = 1.005 + (score - 4) * 0.002
+    if post_news: base = round(1.0 + (base - 1.0) * 0.833, 3)
     return round(base, 3)
 
 def get_fnb_tp_multiplier(score, gap, post_news=False):
-    if score < 4:
-        base = 1.005
-    elif gap >= 6:
-        base = 1.015 + (score - 3) * 0.005
-    elif gap >= 3:
-        base = 1.01 + (score - 3) * 0.005
-    else:
-        base = 1.005 + (score - 3) * 0.005
-    
-    if post_news:
-        base = round(1.0 + (base - 1.0) * 0.833, 3)
+    if score < 4: base = 1.005
+    elif gap >= 6: base = 1.015 + (score - 3) * 0.005
+    elif gap >= 3: base = 1.01 + (score - 3) * 0.005
+    else: base = 1.005 + (score - 3) * 0.005
+    if post_news: base = round(1.0 + (base - 1.0) * 0.833, 3)
     return round(base, 3)
 
 def get_sl_multiplier(score):
-    if score >= 8:
-        return 0.97
-    elif score >= 6:
-        return 0.96
-    else:
-        return 0.95
+    if score >= 8: return 0.97
+    elif score >= 6: return 0.96
+    else: return 0.95
 
 def calculate_quantity(entry_price, stop_price, capital, risk_per_trade, max_capital_per_position):
     risk_amount = capital * risk_per_trade
     max_exposure = capital * max_capital_per_position
     stop_distance = entry_price - stop_price
-    if stop_distance <= 0:
-        return 0
+    if stop_distance <= 0: return 0
     qty_risk = int(risk_amount / stop_distance)
     qty_cap = int(max_exposure / entry_price)
-    quantity = min(qty_risk, qty_cap)
-    return max(0, quantity)
+    return max(0, min(qty_risk, qty_cap))
 
 def get_news_rss(ticker):
     try:
         if ticker in canadian_symbols:
             base_url = "https://news.google.com/rss/search"
-            params = {
-                "q": f"{ticker}+stock",
-                "hl": "en-CA",
-                "gl": "CA"
-            }
+            params = {"q": f"{ticker}+stock", "hl": "en-CA", "gl": "CA"}
         else:
             base_url = "https://news.google.com/rss/search"
-            params = {
-                "q": f"{ticker}+stock",
-                "hl": "en-US",
-                "gl": "US",
-                "ceid": "US:en"
-            }
-
+            params = {"q": f"{ticker}+stock", "hl": "en-US", "gl": "US", "ceid": "US:en"}
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
         r = requests.get(base_url, headers=headers, timeout=5, params=params)
         soup = BeautifulSoup(r.content, 'xml')
@@ -327,42 +292,17 @@ def get_news_rss(ticker):
             try:
                 pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S %Z').replace(tzinfo=timezone.utc)
                 hours_ago = (now_utc - pub_date).total_seconds() / 3600
-                if hours_ago < 6:
-                    news_data.append({'title': title, 'hours_ago': hours_ago})
-            except:
-                pass
+                if hours_ago < 6: news_data.append({'title': title, 'hours_ago': hours_ago})
+            except: pass
         return news_data
-    except:
-        return []
-        
+    except: return []
+
 def analyze_news_sentiment(title, summary=""):
     text = f"{title} {summary}".lower()
-    bullish_strong = [
-        'fda approval', 'partnership', 'deal', 'acquisition', 'buyout',
-        'merger', 'earnings beat', 'upgraded', 'breakthrough', 'contract awarded',
-        'clinical success', 'phase 3', 'drill results', 'high-grade', 'discovery',
-        'resource estimate', 'feasibility study', 'permit granted', 'commercial production',
-        'joint venture', 'bought deal', 'flow-through', 'positive', 'upgrade',
-        'record revenue', 'guidance raised', 'beat estimates'
-    ]
-    bullish = [
-        'growth', 'revenue', 'profit', 'gain', 'surge', 'rally', 'momentum',
-        'expansion', 'launch', 'agreement', 'assay', 'PEA', 'preliminary economic',
-        'buy rating', 'outperform', 'overweight', 'new contract', 'granted',
-        'approval', 'approved', 'commenced', 'completed', 'successful'
-    ]
-    bearish_strong = [
-        'dilution', 'offering', 'bankruptcy', 'lawsuit', 'sec investigation',
-        'delisting', 'fda rejection', 'clinical failure', 'downgraded',
-        'private placement', 'unit offering', 'permit denied', 'cease trade',
-        'suspension', 'default', 'going concern', 'termination', 'insider selling',
-        'ceo departure', 'investigation', 'guidance lowered', 'missed estimates'
-    ]
-    bearish = [
-        'loss', 'decline', 'drop', 'fall', 'warning', 'concern', 'risk',
-        'delay', 'delayed', 'suspended', 'halted', 'reduced', 'lowered',
-        'restructuring', 'layoff', 'impairment', 'write-down', 'debt'
-    ]
+    bullish_strong = ['fda approval','partnership','deal','acquisition','buyout','merger','earnings beat','upgraded','breakthrough','contract awarded','clinical success','phase 3','drill results','high-grade','discovery','resource estimate','feasibility study','permit granted','commercial production','joint venture','bought deal','flow-through','positive','upgrade','record revenue','guidance raised','beat estimates']
+    bullish = ['growth','revenue','profit','gain','surge','rally','momentum','expansion','launch','agreement','assay','PEA','preliminary economic','buy rating','outperform','overweight','new contract','granted','approval','approved','commenced','completed','successful']
+    bearish_strong = ['dilution','offering','bankruptcy','lawsuit','sec investigation','delisting','fda rejection','clinical failure','downgraded','private placement','unit offering','permit denied','cease trade','suspension','default','going concern','termination','insider selling','ceo departure','investigation','guidance lowered','missed estimates']
+    bearish = ['loss','decline','drop','fall','warning','concern','risk','delay','delayed','suspended','halted','reduced','lowered','restructuring','layoff','impairment','write-down','debt']
     score = 0
     for word in bullish_strong:
         if word in text: score += 2; break
@@ -378,10 +318,9 @@ def analyze_news_sentiment(title, summary=""):
 def scrape_forexfactory():
     try:
         url = "https://www.forexfactory.com/calendar"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(url, headers=headers, timeout=3)
         soup = BeautifulSoup(r.content, 'html.parser')
-        
         news_events = []
         rows = soup.find_all('tr', class_='calendar__row')
         for row in rows:
@@ -389,20 +328,14 @@ def scrape_forexfactory():
             currency = row.find('td', class_='currency')
             event = row.find('td', class_='event')
             time_cell = row.find('td', class_='time')
-            
             if impact and currency and event and time_cell:
                 impact_class = impact.find('span', class_='impact')
                 if impact_class and 'high' in impact_class.get('class', []):
                     currency_text = currency.text.strip().upper()
                     event_text = event.text.strip()
                     time_text = time_cell.text.strip()
-                    
-                    if currency_text == 'USD' and any(kw in event_text.lower() for kw in ['fomc statement', 'fomc press conference', 'cpi y/y']):
-                        news_events.append({
-                            'event': event_text,
-                            'time': time_text,
-                            'source': 'ForexFactory'
-                        })
+                    if currency_text == 'USD' and any(kw in event_text.lower() for kw in ['fomc statement','fomc press conference','cpi y/y']):
+                        news_events.append({'event': event_text, 'time': time_text, 'source': 'ForexFactory'})
         print(f"📰 ForexFactory: {len(news_events)} High Impact news found")
         return news_events
     except Exception as e:
@@ -412,10 +345,9 @@ def scrape_forexfactory():
 def scrape_investing():
     try:
         url = "https://www.investing.com/economic-calendar"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(url, headers=headers, timeout=3)
         soup = BeautifulSoup(r.content, 'html.parser')
-        
         news_events = []
         rows = soup.find_all('tr', class_='js-event-item')
         for row in rows[:30]:
@@ -424,23 +356,16 @@ def scrape_investing():
                 currency_text = volatility[2].text.strip().upper()
                 event_text = volatility[3].text.strip()
                 time_text = volatility[0].text.strip()
-                
                 volatility_icons = row.find_all('i', class_='grayFullBullishIcon')
                 if volatility_icons and currency_text == 'USD':
-                    if any(kw in event_text.lower() for kw in ['fomc statement', 'fomc press conference', 'cpi y/y']):
+                    if any(kw in event_text.lower() for kw in ['fomc statement','fomc press conference','cpi y/y']):
                         try:
                             gmt_time = datetime.strptime(time_text, '%H:%M')
                             gmt_time = gmt_time.replace(tzinfo=timezone.utc)
                             et_time = gmt_time.astimezone(MONTREAL_TZ)
                             time_text = et_time.strftime('%H:%M')
-                        except:
-                            pass
-                        
-                        news_events.append({
-                            'event': event_text,
-                            'time': time_text,
-                            'source': 'Investing.com'
-                        })
+                        except: pass
+                        news_events.append({'event': event_text, 'time': time_text, 'source': 'Investing.com'})
         print(f"📰 Investing.com: {len(news_events)} High Impact news found")
         return news_events
     except Exception as e:
@@ -449,18 +374,11 @@ def scrape_investing():
 
 def is_high_impact_news(for_tomorrow=False):
     all_news = []
-    
     ff_news = scrape_forexfactory()
-    if ff_news:
-        all_news.extend(ff_news)
-    
+    if ff_news: all_news.extend(ff_news)
     inv_news = scrape_investing()
-    if inv_news:
-        all_news.extend(inv_news)
-    
-    if not all_news:
-        return False, None
-    
+    if inv_news: all_news.extend(inv_news)
+    if not all_news: return False, None
     unique_news = []
     seen_events = set()
     for news in all_news:
@@ -468,7 +386,6 @@ def is_high_impact_news(for_tomorrow=False):
         if key not in seen_events:
             seen_events.add(key)
             unique_news.append(news)
-    
     if for_tomorrow:
         tomorrow_news = []
         for news in unique_news:
@@ -476,33 +393,17 @@ def is_high_impact_news(for_tomorrow=False):
                 news_time = datetime.strptime(news['time'], '%H:%M').time()
                 if news_time >= datetime.strptime('07:30', '%H:%M').time() and news_time <= datetime.strptime('11:00', '%H:%M').time():
                     tomorrow_news.append(news)
-            except:
-                pass
+            except: pass
         unique_news = tomorrow_news
-        if not unique_news:
-            return False, None
-    
+        if not unique_news: return False, None
     print(f"📰 News check: {len(unique_news)} High Impact news | POST-NEWS ACTIVE")
     for n in unique_news:
         print(f"   • {n['event']} — {n['time']} ({n['source']})")
-    
     return True, unique_news
 
 # === SOURCES ACTIONS ===
 def get_tickers_canada():
-    tickers = [
-        "TD.TO", "BMO.TO", "BNS.TO", "NA.TO",
-        "ENB.TO", "SU.TO", "CNQ.TO", "SOBO.TO",
-        "FTS.TO", "AQN.TO", "H.TO", "BEP-UN.TO",
-        "SHOP.TO", "LSPD.TO", "OTEX.TO", "SPCX.TO",
-        "CAE.TO", "MDA.TO", "BBD-B.TO",
-        "L.TO", "MRU.TO", "CCO.TO", "DOL.TO",
-        "CNR.TO", "CP.TO", "T.TO", "BCE.TO",
-        "BHC.TO", "CSH-UN.TO", "AND.TO",
-        "AEM.TO", "ABX.TO", "WPM.TO",
-        "GRDG.TO", "IFC.TO", "SLF.TO", "GWO.TO",
-        "MG.TO", "RBA.TO", "TFII.TO"
-    ]
+    tickers = ["TD.TO","BMO.TO","BNS.TO","NA.TO","ENB.TO","SU.TO","CNQ.TO","SOBO.TO","FTS.TO","AQN.TO","H.TO","BEP-UN.TO","SHOP.TO","LSPD.TO","OTEX.TO","SPCX.TO","CAE.TO","MDA.TO","BBD-B.TO","L.TO","MRU.TO","CCO.TO","DOL.TO","CNR.TO","CP.TO","T.TO","BCE.TO","BHC.TO","CSH-UN.TO","AND.TO","AEM.TO","ABX.TO","WPM.TO","GRDG.TO","IFC.TO","SLF.TO","GWO.TO","MG.TO","RBA.TO","TFII.TO"]
     random.shuffle(tickers)
     selected = tickers[:20]
     print(f"📊 Canada: {len(selected)} tickers (out of 40)")
@@ -513,11 +414,10 @@ def get_tickers_from_alpha_vantage():
         url = "https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey=demo"
         r = requests.get(url, timeout=8)
         data = r.json()
-        tickers = [item.get('ticker', '') for item in data.get('top_gainers', [])[:50] if item.get('ticker')]
+        tickers = [item.get('ticker','') for item in data.get('top_gainers',[])[:50] if item.get('ticker')]
         print(f"📊 Alpha Vantage: {len(tickers)} tickers")
         return tickers
-    except:
-        return []
+    except: return []
 
 def get_tickers_from_yahoo():
     try:
@@ -528,13 +428,11 @@ def get_tickers_from_yahoo():
         tickers = []
         for a in soup.find_all('a', href=re.compile(r'/quote/')):
             t = a.text.strip()
-            if t and t.isalpha() and 2 <= len(t) <= 5:
-                tickers.append(t.upper())
+            if t and t.isalpha() and 2 <= len(t) <= 5: tickers.append(t.upper())
         tickers = list(dict.fromkeys(tickers))[:30]
         print(f"📊 Yahoo Finance: {len(tickers)} tickers")
         return tickers
-    except:
-        return []
+    except: return []
 
 def get_tickers_from_finviz():
     try:
@@ -552,12 +450,10 @@ def get_tickers_from_finviz():
                     link = cols[1].find('a')
                     if link:
                         t = link.text.strip().upper()
-                        if t and t.isalpha() and 2 <= len(t) <= 5:
-                            tickers.append(t)
+                        if t and t.isalpha() and 2 <= len(t) <= 5: tickers.append(t)
         print(f"📊 Finviz: {len(tickers)} tickers")
         return tickers
-    except:
-        return []
+    except: return []
 
 def get_tickers_from_stockanalysis():
     try:
@@ -570,57 +466,40 @@ def get_tickers_from_stockanalysis():
             td = row.find('td')
             if td:
                 t = td.text.strip().upper()
-                if t and t.isalpha() and 2 <= len(t) <= 5:
-                    tickers.append(t)
+                if t and t.isalpha() and 2 <= len(t) <= 5: tickers.append(t)
         tickers = list(dict.fromkeys(tickers))[:30]
         print(f"📊 StockAnalysis: {len(tickers)} tickers")
         return tickers
-    except:
-        return []
+    except: return []
 
 def clean_ticker(t):
     t_upper = t.upper()
-    if t_upper.endswith('W') or t_upper.endswith('+') or t_upper.endswith('R'):
-        return None
-    if t.count('.') > 1 or '/' in t:
-        return None
-    if len(t) > 6:
-        return None
+    if t_upper.endswith('W') or t_upper.endswith('+') or t_upper.endswith('R'): return None
+    if t.count('.') > 1 or '/' in t: return None
+    if len(t) > 6: return None
     return t_upper
 
 def get_all_tickers():
     ca_clean = []
     us_clean = []
-    
     ca_tickers = get_tickers_canada()
     for t in ca_tickers:
-        if t not in ca_clean:
-            ca_clean.append(t)
-    
+        if t not in ca_clean: ca_clean.append(t)
     us_tickers = []
     for src in [get_tickers_from_alpha_vantage, get_tickers_from_yahoo, get_tickers_from_finviz, get_tickers_from_stockanalysis]:
         try:
             batch = src()
             us_tickers.extend(batch)
-        except:
-            pass
-    
+        except: pass
     for t in list(dict.fromkeys(us_tickers)):
         clean = clean_ticker(t)
-        if clean and clean not in ca_clean and clean not in us_clean:
-            us_clean.append(clean)
-    
+        if clean and clean not in ca_clean and clean not in us_clean: us_clean.append(clean)
     result = ca_clean + us_clean[:20]
     print(f"🎯 TOTAL STOCKS: {len(result)} tickers (CA: {len(ca_clean)}, US: {min(len(us_clean), 20)})")
     return result
 
-# === FNB LIST ===
 def get_fnb_list():
-    fnb_list = [
-        "FLKR", "VMO.TO", "EWT", "XLF", "XLE", "ARKK",
-        "XMA.TO", "CHPS.TO", "EWJ", "TLT", "XLB", "VI.TO",
-        "XGD.TO", "SOXU.TO", "XFN.TO", "ZUT.TO"
-    ]
+    fnb_list = ["FLKR","VMO.TO","EWT","XLF","XLE","ARKK","XMA.TO","CHPS.TO","EWJ","TLT","XLB","VI.TO","XGD.TO","SOXU.TO","XFN.TO","ZUT.TO"]
     print(f"🎯 TOTAL ETFs: {len(fnb_list)} tickers")
     return fnb_list
 
@@ -638,25 +517,21 @@ def get_stock_data(ticker, rate_limited_flag):
         info = stock.info
         time.sleep(random.uniform(0.3, 0.5))
         if not info or (info.get('regularMarketPrice') is None and info.get('currentPrice') is None):
-            if info.get('message') and 'rate' in str(info.get('message', '')).lower():
+            if info.get('message') and 'rate' in str(info.get('message','')).lower():
                 print(f"\n⚠️ RATE LIMIT detected - Pausing")
                 rate_limited_flag[0] = True
                 return None
         price = info.get('currentPrice') or info.get('regularMarketPrice')
-        if not price or price < PRICE_MIN_ACTIONS or price > PRICE_MAX_ACTIONS:
-            return None
+        if not price or price < PRICE_MIN_ACTIONS or price > PRICE_MAX_ACTIONS: return None
         prev_close = info.get('previousClose')
-        if not prev_close:
-            return None
+        if not prev_close: return None
         gap = ((price - prev_close) / prev_close * 100)
         GAP_MIN = get_gap_min()
-        if gap > 50 or gap < GAP_MIN:
-            return None
+        if gap > 50 or gap < GAP_MIN: return None
         volume = info.get('volume', 0)
         is_canadian = ticker in canadian_symbols
         vol_min = 100_000 if is_canadian else 500_000
-        if volume < vol_min:
-            return None
+        if volume < vol_min: return None
         avg_volume = info.get('averageVolume', volume)
         vol_ratio = volume / avg_volume if avg_volume > 0 else 1
         score = 0
@@ -667,31 +542,17 @@ def get_stock_data(ticker, rate_limited_flag):
         if info.get('shortRatio', 0) > 2: score += 1
         rsi_50 = info.get('fiftyDayAverage', 0)
         current_close = info.get('regularMarketPreviousClose', price)
-        if rsi_50 > 0 and current_close > rsi_50: 
-            score += 1
+        if rsi_50 > 0 and current_close > rsi_50: score += 1
         news = get_news_rss(ticker)
         if news:
             for n in news[:3]:
-                sentiment = analyze_news_sentiment(n.get('title', ''))
-                if sentiment >= 1:
-                    score += 1
-                    break
-                elif sentiment <= -2:
-                    score -= 1
-                    break
-        if score < SCORE_MIN_ACTIONS:
-            return None
+                sentiment = analyze_news_sentiment(n.get('title',''))
+                if sentiment >= 1: score += 1; break
+                elif sentiment <= -2: score -= 1; break
+        if score < SCORE_MIN_ACTIONS: return None
         exchange = get_exchange_from_info(info)
         trail_percent = get_trail_percent(score, is_fnb=False)
-        return {
-            'ticker': ticker,
-            'exchange': exchange,
-            'price': price,
-            'gap': gap,
-            'score': score,
-            'vol_ratio': vol_ratio,
-            'trail_percent': trail_percent
-        }
+        return {'ticker': ticker, 'exchange': exchange, 'price': price, 'gap': gap, 'score': score, 'vol_ratio': vol_ratio, 'trail_percent': trail_percent}
     except Exception as e:
         err_str = str(e)
         if "429" in err_str or "Too Many Requests" in err_str:
@@ -705,18 +566,15 @@ def analyze_fnb(ticker):
         info = stock.info
         hist = stock.history(period="1mo")
         time.sleep(random.uniform(0.3, 0.5))
-        if hist.empty or len(hist) < 2:
-            return None
+        if hist.empty or len(hist) < 2: return None
         closes = hist['Close']
         volumes = hist['Volume']
         price = closes.iloc[-1]
         prev_close = closes.iloc[-2]
         volume = volumes.iloc[-1] if len(volumes) > 0 else 0
         avg_volume = volumes.mean() if len(volumes) > 0 else volume
-        if not price or price < 0.5 or price > PRICE_MAX_FNB:
-            return None
-        if not prev_close:
-            return None
+        if not price or price < 0.5 or price > PRICE_MAX_FNB: return None
+        if not prev_close: return None
         gap = ((price - prev_close) / prev_close * 100)
         crit_gap = 0.5 <= gap <= 8
         vol_ratio = volume / avg_volume if avg_volume > 0 else 1
@@ -734,49 +592,23 @@ def analyze_fnb(ticker):
             sma20 = closes.rolling(20).mean().iloc[-1]
             crit_sma = price > 0.70 * sma20
         score = sum([crit_gap, crit_vol, crit_aum, crit_rsi, crit_sma])
-        if score < SCORE_MIN_FNB:
-            return None
+        if score < SCORE_MIN_FNB: return None
         exchange = get_exchange_from_info(info)
         trail_percent = get_trail_percent(score, is_fnb=True)
-        return {
-            'ticker': ticker,
-            'exchange': exchange,
-            'price': price,
-            'gap': gap,
-            'score': score,
-            'vol_ratio': vol_ratio,
-            'aum_m': aum / 1_000_000 if aum else 0,
-            'rsi': rsi,
-            'sma20': sma20,
-            'trail_percent': trail_percent
-        }
-    except:
-        return None
+        return {'ticker': ticker, 'exchange': exchange, 'price': price, 'gap': gap, 'score': score, 'vol_ratio': vol_ratio, 'aum_m': aum/1_000_000 if aum else 0, 'rsi': rsi, 'sma20': sma20, 'trail_percent': trail_percent}
+    except: return None
 
 def format_capital(amount):
-    if amount >= 1_000_000:
-        return f"{amount/1_000_000:.1f}M$"
-    elif amount >= 1_000:
-        return f"{amount/1_000:.0f}k$"
-    else:
-        return f"{amount}$"
+    if amount >= 1_000_000: return f"{amount/1_000_000:.1f}M$"
+    elif amount >= 1_000: return f"{amount/1_000:.0f}k$"
+    else: return f"{amount}$"
 
 def save_signal_for_overnight(signals):
     try:
         data = []
         for signal, ticker_type in signals:
-            data.append({
-                "ticker": signal['ticker'],
-                "type": ticker_type,
-                "entry_price": signal['price'],
-                "score": signal['score'],
-                "gap": signal['gap'],
-                "vol_ratio": signal['vol_ratio'],
-                "trail_percent": signal['trail_percent'],
-                "date": datetime.now(MONTREAL_TZ).strftime('%Y-%m-%d')
-            })
-        with open('/tmp/pro_signal_1455.json', 'w') as f:
-            json.dump(data, f)
+            data.append({"ticker": signal['ticker'], "type": ticker_type, "entry_price": signal['price'], "score": signal['score'], "gap": signal['gap'], "vol_ratio": signal['vol_ratio'], "trail_percent": signal['trail_percent'], "date": datetime.now(MONTREAL_TZ).strftime('%Y-%m-%d')})
+        with open('/tmp/pro_signal_1455.json', 'w') as f: json.dump(data, f)
         print(f"💾 {len(data)} signal(s) saved for overnight check")
         return True
     except Exception as e:
@@ -785,8 +617,7 @@ def save_signal_for_overnight(signals):
 
 def load_previous_signal(ticker_type=None):
     try:
-        with open('/tmp/pro_signal_1455.json', 'r') as f:
-            data = json.load(f)
+        with open('/tmp/pro_signal_1455.json', 'r') as f: data = json.load(f)
         today = datetime.now(MONTREAL_TZ).strftime('%Y-%m-%d')
         if isinstance(data, list):
             for item in data:
@@ -797,11 +628,9 @@ def load_previous_signal(ticker_type=None):
             return None
         else:
             if data.get('date') == today and data.get('ticker'):
-                if ticker_type is None or data.get('type') == ticker_type:
-                    return data
+                if ticker_type is None or data.get('type') == ticker_type: return data
             return None
-    except FileNotFoundError:
-        return None
+    except FileNotFoundError: return None
     except Exception as e:
         print(f"❌ Signal load error: {e}")
         return None
@@ -813,7 +642,6 @@ def main():
     heure = now_mtl.hour
     minute = now_mtl.minute
     
-    # === MARKET CLOSED CHECK ===
     market_status = is_market_closed()
     if market_status == 'closed':
         print(f"🏖️ Market closed (holiday) - No execution")
@@ -823,9 +651,8 @@ def main():
     
     if jour >= 5:
         print("🔧 Weekend — Manual run authorized")
-        # Continue execution without blocking
     
-    # === MODE OVERNIGHT CHECK (15:45, Mon-Thu) ===
+    # === MODE OVERNIGHT CHECK ===
     if jour in [0,1,2,3] and heure == 15 and minute >= 45:
         tomorrow = now_mtl.date() + timedelta(days=1)
         if is_market_closed(datetime(tomorrow.year, tomorrow.month, tomorrow.day)) == 'closed':
@@ -913,6 +740,7 @@ def main():
             stop = round(buy_price * sl_mult, 2)
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+            vol_profile = get_volume_profile(b['ticker'], b['price'])
             message += (
                 f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b>\n"
                 f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
@@ -923,6 +751,8 @@ def main():
                 f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
                 f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
             )
+            if vol_profile['line']:
+                message += vol_profile['line']
         else:
             message += f"❌ No Valid Stock for Overnight\n"
             message += f"⏰ Until next time!\n"
@@ -953,7 +783,6 @@ def main():
             message += f"⏰ Until next time!\n"
         
         message += "\n\n<i>Automated informational signal. Not financial advice.</i>"
-        
         print("\n" + "=" * 50)
         print(f"⏱️ Total time: {elapsed:.1f}s")
         print("📤 Sending Telegram...")
@@ -1060,6 +889,7 @@ def main():
         stop = round(buy_price * sl_mult, 2)
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
         quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+        vol_profile = get_volume_profile(b['ticker'], b['price'])
         message += (
             f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Score: <b>{b['score']}/9</b>\n"
             f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
@@ -1070,6 +900,8 @@ def main():
             f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
             f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
         )
+        if vol_profile['line']:
+            message += vol_profile['line']
     else:
         message += f"❌ No Valid Stock Identified\n"
         message += f"⏰ Until next time!\n"
