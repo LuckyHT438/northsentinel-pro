@@ -61,17 +61,17 @@ def calculate_confidence_score(stock_data, vol_profile, cum_delta=None, inst_flo
     # --- Total /10 ---
     total = round(technical_score + volume_score, 1)
     
-    # --- Verdict — 5 niveaux ---
+    # --- Verdict — 5 niveaux (2 critères : Technique + Volume Profile) ---
     if total >= 8.5:
-        verdict = "Strong setup — 3 greens"
+        verdict = "Strong setup"
     elif total >= 7.5:
-        verdict = "Favorable setup — 2 greens, 1 warning"
+        verdict = "Favorable setup"
     elif total >= 5.5:
-        verdict = "Mixed setup — 2 greens, 1 warning — caution"
+        verdict = "Mixed setup"
     elif total >= 3.5:
-        verdict = "Weak setup — unfavorable risk/reward"
+        verdict = "Weak setup"
     else:
-        verdict = "Poor setup — insufficient confidence"
+        verdict = "Poor setup"
     
     return {
         'total': total,
