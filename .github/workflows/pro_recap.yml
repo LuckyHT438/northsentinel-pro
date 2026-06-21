@@ -1,4 +1,4 @@
-name: NorthSentinel Pro Recap
+name: 🤖 NorthSentinel Pro Recap
 
 on:
   workflow_dispatch:
