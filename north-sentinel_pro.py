@@ -725,7 +725,14 @@ def main():
         if post_news_tomorrow and news_tomorrow:
             message += f"\n⚠️ <b>HIGH IMPACT NEWS TOMORROW</b>\n"
             for news in news_tomorrow:
-                message += f"📅 {news['event']} — {news['time']} ({news['source']})\n"
+                sentiment = analyze_news_sentiment(news['event'])
+                if sentiment >= 1:
+                    direction = "📈"
+                elif sentiment <= -1:
+                    direction = "📉"
+                else:
+                    direction = "➡️"
+                message += f"📅 {news['event']} — {news['time']} ({news['source']}) {direction}\n"
             message += f"💡 Critical window: 7:30 AM-11:00 AM (Montreal time)\n"
             message += "═" * 35 + "\n"
         
@@ -834,8 +841,8 @@ def main():
     if (heure == 9 and minute >= 25) or (heure == 14 and minute >= 55):
         post_news, news_info = is_high_impact_news()
     
-    current_score_min_actions = SCORE_MIN_ACTIONS + 1 if post_news else SCORE_MIN_ACTIONS
-    current_score_min_fnb = SCORE_MIN_FNB + 1 if post_news else SCORE_MIN_FNB
+    current_score_min_actions = SCORE_MIN_ACTIONS
+    current_score_min_fnb = SCORE_MIN_FNB
     
     GAP_MIN = get_gap_min()
     
@@ -907,8 +914,14 @@ def main():
     if post_news and news_info:
         message += f"\n⚠️ <b>HIGH IMPACT NEWS DETECTED</b>\n"
         for news in news_info:
-            message += f"📅 {news['event']} — {news['time']} ({news['source']})\n"
-        message += f"📊 Min Score Raised: Stocks {current_score_min_actions}/9 | ETFs {current_score_min_fnb}/5\n"
+            sentiment = analyze_news_sentiment(news['event'])
+            if sentiment >= 1:
+                direction = "📈"
+            elif sentiment <= -1:
+                direction = "📉"
+            else:
+                direction = "➡️"
+            message += f"📅 {news['event']} — {news['time']} ({news['source']}) {direction}\n"
         message += "═" * 35 + "\n"
     
     message += f"\n🚀 <b>STOCK</b> - Best Setup\n"
