@@ -1,5 +1,5 @@
 # ============================================================
-# NORTHSENTINEL PRO — INSTITUTIONAL-GRADE SCALPING & OVERNIGHT
+# NORTHSENTINEL PRO — ADVANCED SCALPING & OVERNIGHT SIGNALS
 # ============================================================
 import requests
 import yfinance as yf
