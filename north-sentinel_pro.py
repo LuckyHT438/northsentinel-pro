@@ -16,8 +16,6 @@ from urllib3.util.retry import Retry
 
 # === MODULES PRO ===
 from pro_volume_profile import get_volume_profile
-from pro_cumulative_delta import calculate_cumulative_delta
-from pro_institutional_flow import detect_institutional_flow
 from pro_confidence import calculate_confidence_score
 from pro_macro_context import get_macro_context
 
@@ -744,22 +742,19 @@ def main():
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
             vol_profile = get_volume_profile(b['ticker'], b['price'])
-            cum_delta = calculate_cumulative_delta(b['ticker'])
-            inst_flow = detect_institutional_flow(b['ticker'])
-            confidence = calculate_confidence_score(b, vol_profile, cum_delta, inst_flow)
+            confidence = calculate_confidence_score(b, vol_profile)
             sector_context = get_macro_context(b['ticker'])
             
-            # Verdict
             if confidence['total'] >= 8.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢 — 3 greens\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
             elif confidence['total'] >= 7.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
             elif confidence['total'] >= 5.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
             elif confidence['total'] >= 3.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠 — unfavorable risk/reward\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
             else:
-                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴 — insufficient confidence\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
             
             message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b>\n"
             message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
@@ -768,10 +763,6 @@ def main():
             message += f"  💵 CUR. PRICE: ${b['price']}\n"
             if vol_profile['line']:
                 message += vol_profile['line']
-            if cum_delta['line']:
-                message += cum_delta['line']
-            if inst_flow['line']:
-                message += inst_flow['line']
             message += verdict_line
             message += (
                 f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -796,21 +787,19 @@ def main():
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
             vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
-            cum_delta_etf = calculate_cumulative_delta(b['ticker'])
-            inst_flow_etf = detect_institutional_flow(b['ticker'])
-            confidence_etf = calculate_confidence_score(b, vol_profile_etf, cum_delta_etf, inst_flow_etf)
+            confidence_etf = calculate_confidence_score(b, vol_profile_etf)
             sector_context_etf = get_macro_context(b['ticker'])
             
             if confidence_etf['total'] >= 8.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢 — 3 greens\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
             elif confidence_etf['total'] >= 7.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
             elif confidence_etf['total'] >= 5.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
             elif confidence_etf['total'] >= 3.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠 — unfavorable risk/reward\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
             else:
-                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴 — insufficient confidence\n"
+                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
             
             message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b>\n"
             message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
@@ -819,10 +808,6 @@ def main():
             message += f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
             if vol_profile_etf['line']:
                 message += vol_profile_etf['line']
-            if cum_delta_etf['line']:
-                message += cum_delta_etf['line']
-            if inst_flow_etf['line']:
-                message += inst_flow_etf['line']
             message += verdict_line
             message += (
                 f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -939,22 +924,19 @@ def main():
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
         quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
         vol_profile = get_volume_profile(b['ticker'], b['price'])
-        cum_delta = calculate_cumulative_delta(b['ticker'])
-        inst_flow = detect_institutional_flow(b['ticker'])
-        confidence = calculate_confidence_score(b, vol_profile, cum_delta, inst_flow)
+        confidence = calculate_confidence_score(b, vol_profile)
         sector_context = get_macro_context(b['ticker'])
         
-        # Verdict
         if confidence['total'] >= 8.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢 — 3 greens\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
         elif confidence['total'] >= 7.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
         elif confidence['total'] >= 5.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
         elif confidence['total'] >= 3.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠 — unfavorable risk/reward\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
         else:
-            verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴 — insufficient confidence\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
         
         message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b>\n"
         message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
@@ -963,10 +945,6 @@ def main():
         message += f"  💵 CUR. PRICE: ${b['price']}\n"
         if vol_profile['line']:
             message += vol_profile['line']
-        if cum_delta['line']:
-            message += cum_delta['line']
-        if inst_flow['line']:
-            message += inst_flow['line']
         message += verdict_line
         message += (
             f"  🎯 ENTRY PRICE: ${buy_price}\n"
@@ -991,21 +969,19 @@ def main():
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
         quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
         vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
-        cum_delta_etf = calculate_cumulative_delta(b['ticker'])
-        inst_flow_etf = detect_institutional_flow(b['ticker'])
-        confidence_etf = calculate_confidence_score(b, vol_profile_etf, cum_delta_etf, inst_flow_etf)
+        confidence_etf = calculate_confidence_score(b, vol_profile_etf)
         sector_context_etf = get_macro_context(b['ticker'])
         
         if confidence_etf['total'] >= 8.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢 — 3 greens\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
         elif confidence_etf['total'] >= 7.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢 — 2 greens, 1 warning\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
         elif confidence_etf['total'] >= 5.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡 — 2 greens, 1 warning — caution\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
         elif confidence_etf['total'] >= 3.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠 — unfavorable risk/reward\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
         else:
-            verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴 — insufficient confidence\n"
+            verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
         
         message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b>\n"
         message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
@@ -1014,10 +990,6 @@ def main():
         message += f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
         if vol_profile_etf['line']:
             message += vol_profile_etf['line']
-        if cum_delta_etf['line']:
-            message += cum_delta_etf['line']
-        if inst_flow_etf['line']:
-            message += inst_flow_etf['line']
         message += verdict_line
         message += (
             f"  🎯 ENTRY PRICE: ${buy_price}\n"
