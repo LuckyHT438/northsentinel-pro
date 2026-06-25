@@ -827,7 +827,7 @@ def main():
             message += f"❌ No Valid ETF for Overnight\n"
             message += f"⏰ Until next time!\n"
         
-        message += "\n\n<i>Automated informational signal. Not financial advice.</i>"
+        message += "\n\n<i>Automated informational signal. Not financial or trading advice.</i>"
         print("\n" + "=" * 50)
         print(f"⏱️ Total time: {elapsed:.1f}s")
         print("📤 Sending Telegram...")
@@ -1026,7 +1026,7 @@ def main():
         if signals_to_save:
             save_signal_for_overnight(signals_to_save)
     
-    message += "\n\n<i>Automated informational signal. Not financial advice.</i>"
+    message += "\n\n<i>Automated informational signal. Not financial or trading advice.</i>"
     
     print("\n" + "=" * 50)
     print(f"⏱️ Total time: {elapsed:.1f}s")
