@@ -43,7 +43,7 @@ def build_recap_message():
     except:
         pass
     
-    message += "\n<i>Automated recap. Not financial advice.</i>"
+    message += "\n<i>Automated recap. Not financial or trading advice.</i>"
     
     return message
 
