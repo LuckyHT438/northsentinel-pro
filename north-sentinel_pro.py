@@ -718,7 +718,7 @@ def main():
         
         # === TELEGRAM MESSAGE - PRO OVERNIGHT ===
         message = f"🤖 <b>NorthSentinel Pro</b>\n"
-        message += f"<i>US/CA institutional-grade scalping & overnight hold signals. Manual execution. Post-market recap.</i>\n"
+        message += f"<i>US/CA advanced intraday & overnight hold trading signals. Manual execution. Post-market recap.</i>\n"
         message += f"📅 {now_mtl.strftime('%Y-%m-%d %H:%M')} (Montreal)\n"
         message += "═" * 35 + "\n"
         
@@ -906,7 +906,7 @@ def main():
     
     # === TELEGRAM MESSAGE - PRO NORMAL ===
     message = f"🤖 <b>NorthSentinel Pro</b>\n"
-    message += f"<i>US/CA institutional-grade scalping & overnight hold signals. Manual execution. Post-market recap.</i>\n"
+    message += f"<i>US/CA advanced intraday & overnight hold trading signals. Manual execution. Post-market recap.</i>\n"
     message += f"📅 {now_mtl.strftime('%Y-%m-%d %H:%M')} (Montreal)\n"
     message += f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}%\n"
     message += "═" * 35 + "\n"
