@@ -776,7 +776,7 @@ def main():
                 f"  📦 QTY TO BUY: {quantity} shares\n"
                 f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
                 f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
-                f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
+                f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
             )
         else:
             message += f"❌ No Valid Stock for Overnight\n"
@@ -821,7 +821,7 @@ def main():
                 f"  📦 QTY TO BUY: {quantity} units\n"
                 f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
                 f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
-                f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
+                f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
             )
         else:
             message += f"❌ No Valid ETF for Overnight\n"
@@ -964,7 +964,7 @@ def main():
             f"  📦 QTY TO BUY: {quantity} shares\n"
             f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
             f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
-            f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
+            f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
         )
     else:
         message += f"❌ No Valid Stock Identified\n"
@@ -1009,7 +1009,7 @@ def main():
             f"  📦 QTY TO BUY: {quantity} units\n"
             f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
             f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
-            f"  🔄 TRAILING SL: ${trail_price} → {b['trail_percent']}%\n"
+            f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
         )
     else:
         message += f"❌ No Valid ETF Identified\n"
