@@ -662,7 +662,7 @@ def main():
             return
         
         print("=" * 50)
-        print(f"🤖 NorthSentinel Pro — Overnight Check - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
+        print(f"🤖 NorthSentinel Pro™ — Overnight Check - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
         print("=" * 50)
         
         post_news_tomorrow, news_tomorrow = is_high_impact_news(for_tomorrow=True)
@@ -717,7 +717,7 @@ def main():
         elapsed = time.time() - START_TIME
         
         # === TELEGRAM MESSAGE - PRO OVERNIGHT ===
-        message = f"🤖 <b>NorthSentinel Pro</b>\n"
+        message = f"🤖 <b>NorthSentinel Pro</b>™\n"
         message += f"<i>US/CA advanced intraday & overnight hold trading signals. Manual execution. Post-market recap.</i>\n"
         message += f"📅 {now_mtl.strftime('%Y-%m-%d %H:%M')} (Montreal)\n"
         message += "═" * 35 + "\n"
@@ -847,7 +847,7 @@ def main():
     GAP_MIN = get_gap_min()
     
     print("=" * 50)
-    print(f"🤖 NorthSentinel Pro - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
+    print(f"🤖 NorthSentinel Pro™ - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
     print(f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}% | Stock Score: {current_score_min_actions}/9 | ETF: {current_score_min_fnb}/5")
     if market_status == 'early_close':
         print(f"⏰ EARLY CLOSE 1:00 PM ET")
@@ -905,7 +905,7 @@ def main():
     elapsed = time.time() - START_TIME
     
     # === TELEGRAM MESSAGE - PRO NORMAL ===
-    message = f"🤖 <b>NorthSentinel Pro</b>\n"
+    message = f"🤖 <b>NorthSentinel Pro</b>™\n"
     message += f"<i>US/CA advanced intraday & overnight hold trading signals. Manual execution. Post-market recap.</i>\n"
     message += f"📅 {now_mtl.strftime('%Y-%m-%d %H:%M')} (Montreal)\n"
     message += f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}%\n"
