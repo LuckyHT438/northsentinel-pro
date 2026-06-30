@@ -203,7 +203,7 @@ def build_recap_message():
     """Construit le message récap enrichi"""
     now_mtl = datetime.now(MONTREAL_TZ)
 
-    message = f"📊 <b>NorthSentinel Pro — Session Recap</b>\n"
+    message = f"📊 <b>NorthSentinel Pro™ — Session Recap</b>\n"
     message += f"📅 {now_mtl.strftime('%Y-%m-%d')} (Montreal)\n"
     message += "═" * 30 + "\n\n"
 
