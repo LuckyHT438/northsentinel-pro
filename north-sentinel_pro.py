@@ -39,60 +39,57 @@ SCORE_MIN_OVERNIGHT_FNB = 5
 PRICE_MAX_FNB = 9999
 
 # === CALENDRIER JOURS FÉRIÉS US/CANADA ===
-def is_market_closed(check_date=None):
-    if check_date is None:
-        check_date = datetime.now(MONTREAL_TZ).date()
-    elif isinstance(check_date, datetime):
-        check_date = check_date.date()
-    
-    year = check_date.year
-    
+def _build_us_holidays(year):
     us_holidays = set()
     us_holidays.add(date(year, 1, 1))
     us_holidays.add(date(year, 6, 19))
     us_holidays.add(date(year, 7, 4))
     us_holidays.add(date(year, 12, 25))
-    
+
     mlk = date(year, 1, 1)
     while mlk.weekday() != 0:
         mlk = date(year, 1, mlk.day + 1)
     mlk = date(year, 1, mlk.day + 14)
     us_holidays.add(mlk)
-    
+
     pres = date(year, 2, 1)
     while pres.weekday() != 0:
         pres = date(year, 2, pres.day + 1)
     pres = date(year, 2, pres.day + 14)
     us_holidays.add(pres)
-    
+
     mem = date(year, 5, 31)
     while mem.weekday() != 0:
         mem = date(year, 5, mem.day - 1)
     us_holidays.add(mem)
-    
+
     lab = date(year, 9, 1)
     while lab.weekday() != 0:
         lab = date(year, 9, lab.day + 1)
     us_holidays.add(lab)
-    
+
     thanks = date(year, 11, 1)
     while thanks.weekday() != 3:
         thanks = date(year, 11, thanks.day + 1)
     thanks = date(year, 11, thanks.day + 21)
     us_holidays.add(thanks)
-    
+
+    return us_holidays
+
+
+def _build_ca_holidays(year):
     ca_holidays = set()
     ca_holidays.add(date(year, 1, 1))
     ca_holidays.add(date(year, 7, 1))
     ca_holidays.add(date(year, 12, 25))
     ca_holidays.add(date(year, 12, 26))
-    
+
     fam = date(year, 2, 1)
     while fam.weekday() != 0:
         fam = date(year, 2, fam.day + 1)
     fam = date(year, 2, fam.day + 14)
     ca_holidays.add(fam)
-    
+
     a = year % 19
     b = year // 100
     c = year % 100
@@ -110,50 +107,90 @@ def is_market_closed(check_date=None):
     easter = date(year, month, day)
     good_friday = easter - timedelta(days=2)
     ca_holidays.add(good_friday)
-    
+
     vic = date(year, 5, 24)
     while vic.weekday() != 0:
         vic = date(year, 5, vic.day - 1)
     ca_holidays.add(vic)
-    
+
     civ = date(year, 8, 1)
     while civ.weekday() != 0:
         civ = date(year, 8, civ.day + 1)
     ca_holidays.add(civ)
-    
+
+    lab = date(year, 9, 1)
+    while lab.weekday() != 0:
+        lab = date(year, 9, lab.day + 1)
     ca_holidays.add(lab)
-    
+
     ca_thanks = date(year, 10, 1)
     while ca_thanks.weekday() != 0:
         ca_thanks = date(year, 10, ca_thanks.day + 1)
     ca_thanks = date(year, 10, ca_thanks.day + 7)
     ca_holidays.add(ca_thanks)
-    
-    early_close_dates = set()
-    early_close_dates.add(date(year, 7, 3))
-    early_close_dates.add(date(year, 11, 28))
-    early_close_dates.add(date(year, 12, 24))
-    early_close_dates.add(date(year, 12, 31))
-    
-    def adjust_weekend(d):
-        if d.weekday() == 5:
-            return d - timedelta(days=1)
-        elif d.weekday() == 6:
-            return d + timedelta(days=1)
-        return d
-    
+
+    return ca_holidays
+
+
+def _adjust_weekend(d):
+    if d.weekday() == 5:
+        return d - timedelta(days=1)
+    elif d.weekday() == 6:
+        return d + timedelta(days=1)
+    return d
+
+
+def is_us_market_closed(check_date=None):
+    if check_date is None:
+        check_date = datetime.now(MONTREAL_TZ).date()
+    elif isinstance(check_date, datetime):
+        check_date = check_date.date()
+
+    year = check_date.year
+    us_holidays = _build_us_holidays(year)
     adjusted_us = set()
     for d in us_holidays:
-        adjusted_us.add(adjust_weekend(d))
-    
+        adjusted_us.add(_adjust_weekend(d))
+
+    return check_date in adjusted_us
+
+
+def is_ca_market_closed(check_date=None):
+    if check_date is None:
+        check_date = datetime.now(MONTREAL_TZ).date()
+    elif isinstance(check_date, datetime):
+        check_date = check_date.date()
+
+    year = check_date.year
+    ca_holidays = _build_ca_holidays(year)
     adjusted_ca = set()
     for d in ca_holidays:
-        adjusted_ca.add(adjust_weekend(d))
-    
-    if check_date in adjusted_us or check_date in adjusted_ca:
-        return 'closed'
-    elif check_date in early_close_dates:
+        adjusted_ca.add(_adjust_weekend(d))
+
+    return check_date in adjusted_ca
+
+
+def is_market_closed(check_date=None):
+    if check_date is None:
+        check_date = datetime.now(MONTREAL_TZ).date()
+    elif isinstance(check_date, datetime):
+        check_date = check_date.date()
+
+    year = check_date.year
+    early_close_dates = {date(year, 7, 3), date(year, 11, 28), date(year, 12, 24), date(year, 12, 31)}
+
+    if check_date in early_close_dates:
         return 'early_close'
+
+    us_closed = is_us_market_closed(check_date)
+    ca_closed = is_ca_market_closed(check_date)
+
+    if us_closed and ca_closed:
+        return 'closed'
+    elif us_closed:
+        return 'us_closed'
+    elif ca_closed:
+        return 'ca_closed'
     else:
         return 'open'
 
@@ -481,29 +518,40 @@ def clean_ticker(t):
     if len(t) > 6: return None
     return t_upper
 
-def get_all_tickers():
+def get_all_tickers(exclude_ca=False, exclude_us=False):
     ca_clean = []
     us_clean = []
-    ca_tickers = get_tickers_canada()
-    for t in ca_tickers:
-        if t not in ca_clean: ca_clean.append(t)
-    us_tickers = []
-    for src in [get_tickers_from_alpha_vantage, get_tickers_from_yahoo, get_tickers_from_finviz, get_tickers_from_stockanalysis]:
-        try:
-            batch = src()
-            us_tickers.extend(batch)
-        except: pass
-    for t in list(dict.fromkeys(us_tickers)):
-        clean = clean_ticker(t)
-        if clean and clean not in ca_clean and clean not in us_clean: us_clean.append(clean)
+
+    if not exclude_ca:
+        ca_tickers = get_tickers_canada()
+        for t in ca_tickers:
+            if t not in ca_clean: ca_clean.append(t)
+
+    if not exclude_us:
+        us_tickers = []
+        for src in [get_tickers_from_alpha_vantage, get_tickers_from_yahoo, get_tickers_from_finviz, get_tickers_from_stockanalysis]:
+            try:
+                batch = src()
+                us_tickers.extend(batch)
+            except: pass
+        for t in list(dict.fromkeys(us_tickers)):
+            clean = clean_ticker(t)
+            if clean and clean not in ca_clean and clean not in us_clean: us_clean.append(clean)
+
     result = ca_clean + us_clean[:20]
     print(f"🎯 TOTAL STOCKS: {len(result)} tickers (CA: {len(ca_clean)}, US: {min(len(us_clean), 20)})")
     return result
 
-def get_fnb_list():
-    fnb_list = ["FLKR","VMO.TO","EWT","XLF","XLE","ARKK","XMA.TO","CHPS.TO","EWJ","TLT","XLB","VI.TO","XGD.TO","SOXU.TO","XFN.TO","ZUT.TO"]
-    print(f"🎯 TOTAL ETFs: {len(fnb_list)} tickers")
-    return fnb_list
+def get_fnb_list(exclude_ca=False, exclude_us=False):
+    all_fnb = ["FLKR","VMO.TO","EWT","XLF","XLE","ARKK","XMA.TO","CHPS.TO","EWJ","TLT","XLB","VI.TO","XGD.TO","SOXU.TO","XFN.TO","ZUT.TO"]
+    
+    if exclude_ca:
+        all_fnb = [f for f in all_fnb if not f.endswith('.TO')]
+    if exclude_us:
+        all_fnb = [f for f in all_fnb if f.endswith('.TO')]
+    
+    print(f"🎯 TOTAL ETFs: {len(all_fnb)} tickers")
+    return all_fnb
 
 def calculate_rsi(prices, period=14):
     delta = prices.diff()
@@ -525,7 +573,6 @@ def get_stock_data(ticker, rate_limited_flag):
                 return None
         price = info.get('currentPrice') or info.get('regularMarketPrice')
         
-        # Si pré-ouverture (avant 9h30), utiliser le prix pre-market
         now_mtl = datetime.now(MONTREAL_TZ)
         if now_mtl.hour == 9 and now_mtl.minute < 30:
             pre_market = info.get('preMarketPrice')
@@ -581,7 +628,6 @@ def analyze_fnb(ticker):
         volumes = hist['Volume']
         price = closes.iloc[-1]
         
-        # Si pré-ouverture (avant 9h30), utiliser le prix pre-market
         now_mtl = datetime.now(MONTREAL_TZ)
         if now_mtl.hour == 9 and now_mtl.minute < 30:
             pre_market = info.get('preMarketPrice')
@@ -635,7 +681,7 @@ def save_signal_for_overnight(signals):
 
 def load_previous_signal(ticker_type=None):
     try:
-        with open('/tmp/pro_signal_1455.json', 'r') as f: data = json.load(f)
+        with open('pro_signals_today.json', 'r') as f: data = json.load(f)
         today = datetime.now(MONTREAL_TZ).strftime('%Y-%m-%d')
         if isinstance(data, list):
             for item in data:
@@ -662,8 +708,12 @@ def main():
     
     market_status = is_market_closed()
     if market_status == 'closed':
-        print(f"🏖️ Market closed (holiday) - No execution")
+        print(f"🏖️ Both markets closed (holiday) - No execution")
         return
+    elif market_status == 'us_closed':
+        print(f"🇺🇸 US market closed today")
+    elif market_status == 'ca_closed':
+        print(f"🇨🇦 CA market closed today")
     elif market_status == 'early_close':
         print(f"⏰ Early close today (1:00 PM ET)")
     
@@ -673,9 +723,20 @@ def main():
     # === MODE OVERNIGHT CHECK ===
     if jour in [0,1,2,3] and heure == 15 and minute >= 45:
         tomorrow = now_mtl.date() + timedelta(days=1)
-        if is_market_closed(datetime(tomorrow.year, tomorrow.month, tomorrow.day)) == 'closed':
-            print(f"🏖️ Tomorrow is holiday - No Overnight Check")
+        tomorrow_dt = datetime(tomorrow.year, tomorrow.month, tomorrow.day)
+        tomorrow_status = is_market_closed(tomorrow_dt)
+        
+        if tomorrow_status == 'closed':
+            print(f"🏖️ Both markets closed tomorrow - No Overnight Check")
             return
+        
+        exclude_ca = (tomorrow_status == 'ca_closed')
+        exclude_us = (tomorrow_status == 'us_closed')
+        
+        if exclude_ca:
+            print(f"🇨🇦 CA market closed tomorrow — scanning US only")
+        elif exclude_us:
+            print(f"🇺🇸 US market closed tomorrow — scanning CA only")
         
         print("=" * 50)
         print(f"🤖 NorthSentinel Pro™ — Overnight Check - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
@@ -683,7 +744,7 @@ def main():
         
         post_news_tomorrow, news_tomorrow = is_high_impact_news(for_tomorrow=True)
         
-        tickers_actions = get_all_tickers()
+        tickers_actions = get_all_tickers(exclude_ca=exclude_ca, exclude_us=exclude_us)
         print(f"\n🔍 Phase 1: Analyzing {len(tickers_actions)} stocks for Overnight...\n")
         
         rate_limited_flag = [False]
@@ -709,7 +770,7 @@ def main():
                 time.sleep(15)
                 rate_limited_flag[0] = False
         
-        tickers_fnb = get_fnb_list()
+        tickers_fnb = get_fnb_list(exclude_ca=exclude_ca, exclude_us=exclude_us)
         print(f"\n🔍 Phase 2: Analyzing {len(tickers_fnb)} ETFs for Overnight...\n")
         
         buys_fnb = []
@@ -733,8 +794,18 @@ def main():
         elapsed = time.time() - START_TIME
         
         # === TELEGRAM MESSAGE - PRO OVERNIGHT ===
+        scope_label = "US/CA"
+        if exclude_ca:
+            scope_label = "US Only"
+        elif exclude_us:
+            scope_label = "CA Only"
+        
         message = f"🤖 <b>NorthSentinel Pro</b>™\n"
-        message += f"<i>US/CA advanced intraday & overnight hold trading signals. Manual execution. Post-market recap.</i>\n"
+        message += f"<i>{scope_label} advanced intraday & overnight hold trading signals. Manual execution. Post-market recap.</i>\n"
+        if exclude_ca:
+            message += f"🇨🇦 CA market closed tomorrow — US setups only\n"
+        elif exclude_us:
+            message += f"🇺🇸 US market closed tomorrow — CA setups only\n"
         message += f"📅 {now_mtl.strftime('%Y-%m-%d %H:%M')} (Montreal)\n"
         message += "═" * 35 + "\n"
         
@@ -862,14 +933,22 @@ def main():
     
     GAP_MIN = get_gap_min()
     
+    exclude_ca_normal = (market_status == 'ca_closed')
+    exclude_us_normal = (market_status == 'us_closed')
+    
     print("=" * 50)
     print(f"🤖 NorthSentinel Pro™ - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
     print(f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}% | Stock Score: {current_score_min_actions}/9 | ETF: {current_score_min_fnb}/5")
+    if market_status in ('us_closed', 'ca_closed'):
+        if market_status == 'us_closed':
+            print(f"🇺🇸 US market closed — CA only")
+        else:
+            print(f"🇨🇦 CA market closed — US only")
     if market_status == 'early_close':
         print(f"⏰ EARLY CLOSE 1:00 PM ET")
     print("=" * 50)
     
-    tickers_actions = get_all_tickers()
+    tickers_actions = get_all_tickers(exclude_ca=exclude_ca_normal, exclude_us=exclude_us_normal)
     print(f"\n🔍 Phase 1: Analyzing {len(tickers_actions)} stocks...\n")
     
     rate_limited_flag = [False]
@@ -896,7 +975,7 @@ def main():
             time.sleep(15)
             rate_limited_flag[0] = False
     
-    tickers_fnb = get_fnb_list()
+    tickers_fnb = get_fnb_list(exclude_ca=exclude_ca_normal, exclude_us=exclude_us_normal)
     print(f"\n🔍 Phase 2: Analyzing {len(tickers_fnb)} ETFs...\n")
     
     buys_fnb = []
@@ -921,10 +1000,22 @@ def main():
     elapsed = time.time() - START_TIME
     
     # === TELEGRAM MESSAGE - PRO NORMAL ===
+    scope_label = "US/CA"
+    if exclude_ca_normal:
+        scope_label = "US Only"
+    elif exclude_us_normal:
+        scope_label = "CA Only"
+    
     message = f"🤖 <b>NorthSentinel Pro</b>™\n"
-    message += f"<i>US/CA advanced intraday & overnight hold trading signals. Manual execution. Post-market recap.</i>\n"
+    message += f"<i>{scope_label} advanced intraday & overnight hold trading signals. Manual execution. Post-market recap.</i>\n"
+    if exclude_ca_normal:
+        message += f"🇨🇦 CA market closed — US setups only\n"
+    elif exclude_us_normal:
+        message += f"🇺🇸 US market closed — CA setups only\n"
     message += f"📅 {now_mtl.strftime('%Y-%m-%d %H:%M')} (Montreal)\n"
     message += f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}%\n"
+    if market_status == 'early_close':
+        message += f"⚠️ EARLY CLOSE TODAY (1:00 PM ET)\n"
     message += "═" * 35 + "\n"
     
     if post_news and news_info:
