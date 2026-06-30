@@ -524,6 +524,14 @@ def get_stock_data(ticker, rate_limited_flag):
                 rate_limited_flag[0] = True
                 return None
         price = info.get('currentPrice') or info.get('regularMarketPrice')
+        
+        # Si pré-ouverture (avant 9h30), utiliser le prix pre-market
+        now_mtl = datetime.now(MONTREAL_TZ)
+        if now_mtl.hour == 9 and now_mtl.minute < 30:
+            pre_market = info.get('preMarketPrice')
+            if pre_market and pre_market > 0:
+                price = pre_market
+        
         if not price or price < PRICE_MIN_ACTIONS or price > PRICE_MAX_ACTIONS: return None
         prev_close = info.get('previousClose')
         if not prev_close: return None
@@ -572,6 +580,14 @@ def analyze_fnb(ticker):
         closes = hist['Close']
         volumes = hist['Volume']
         price = closes.iloc[-1]
+        
+        # Si pré-ouverture (avant 9h30), utiliser le prix pre-market
+        now_mtl = datetime.now(MONTREAL_TZ)
+        if now_mtl.hour == 9 and now_mtl.minute < 30:
+            pre_market = info.get('preMarketPrice')
+            if pre_market and pre_market > 0:
+                price = pre_market
+        
         prev_close = closes.iloc[-2]
         volume = volumes.iloc[-1] if len(volumes) > 0 else 0
         avg_volume = volumes.mean() if len(volumes) > 0 else volume
