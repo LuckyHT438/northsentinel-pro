@@ -626,7 +626,7 @@ def save_signal_for_overnight(signals):
         data = []
         for signal, ticker_type in signals:
             data.append({"ticker": signal['ticker'], "type": ticker_type, "entry_price": signal['price'], "score": signal['score'], "gap": signal['gap'], "vol_ratio": signal['vol_ratio'], "trail_percent": signal['trail_percent'], "date": datetime.now(MONTREAL_TZ).strftime('%Y-%m-%d')})
-        with open('/tmp/pro_signal_1455.json', 'w') as f: json.dump(data, f)
+        with open('pro_signals_today.json', 'w') as f: json.dump(data, f)
         print(f"💾 {len(data)} signal(s) saved for overnight check")
         return True
     except Exception as e:
