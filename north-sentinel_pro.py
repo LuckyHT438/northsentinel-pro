@@ -730,8 +730,8 @@ def main():
             print(f"🏖️ Both markets closed tomorrow - No Overnight Check")
             return
         
-        exclude_ca = (tomorrow_status == 'ca_closed')
-        exclude_us = (tomorrow_status == 'us_closed')
+        exclude_ca = (market_status == 'ca_closed') or (tomorrow_status == 'ca_closed')
+        exclude_us = (market_status == 'us_closed') or (tomorrow_status == 'us_closed')
         
         if exclude_ca:
             print(f"🇨🇦 CA market closed tomorrow — scanning US only")
