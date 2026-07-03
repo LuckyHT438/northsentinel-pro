@@ -562,6 +562,18 @@ def calculate_rsi(prices, period=14):
     return rsi.iloc[-1] if len(rsi) > 0 else None
 
 def get_stock_data(ticker, rate_limited_flag):
+    # 🔧 CORRECTION : Vérifier si le marché est fermé avant d'analyser
+    now_mtl = datetime.now(MONTREAL_TZ)
+    market_status = is_market_closed()
+    
+    # Si c'est un ticker US (pas canadien) et que le marché US est fermé
+    if ticker not in canadian_symbols and market_status in ('closed', 'us_closed'):
+        return None
+    
+    # Si c'est un ticker CA et que le marché CA est fermé
+    if ticker in canadian_symbols and market_status in ('closed', 'ca_closed'):
+        return None
+    
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
@@ -573,7 +585,6 @@ def get_stock_data(ticker, rate_limited_flag):
                 return None
         price = info.get('currentPrice') or info.get('regularMarketPrice')
         
-        now_mtl = datetime.now(MONTREAL_TZ)
         if now_mtl.hour == 9 and now_mtl.minute < 30:
             pre_market = info.get('preMarketPrice')
             if pre_market and pre_market > 0:
@@ -618,6 +629,18 @@ def get_stock_data(ticker, rate_limited_flag):
         return None
 
 def analyze_fnb(ticker):
+    # 🔧 CORRECTION : Vérifier si le marché est fermé avant d'analyser
+    now_mtl = datetime.now(MONTREAL_TZ)
+    market_status = is_market_closed()
+    
+    # Si c'est un ETF US (pas .TO) et que le marché US est fermé
+    if not ticker.endswith('.TO') and market_status in ('closed', 'us_closed'):
+        return None
+    
+    # Si c'est un ETF CA (.TO) et que le marché CA est fermé
+    if ticker.endswith('.TO') and market_status in ('closed', 'ca_closed'):
+        return None
+    
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
@@ -628,7 +651,6 @@ def analyze_fnb(ticker):
         volumes = hist['Volume']
         price = closes.iloc[-1]
         
-        now_mtl = datetime.now(MONTREAL_TZ)
         if now_mtl.hour == 9 and now_mtl.minute < 30:
             pre_market = info.get('preMarketPrice')
             if pre_market and pre_market > 0:
