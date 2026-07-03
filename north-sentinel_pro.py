@@ -177,7 +177,8 @@ def is_market_closed(check_date=None):
         check_date = check_date.date()
 
     year = check_date.year
-    early_close_dates = {date(year, 7, 3), date(year, 11, 28), date(year, 12, 24), date(year, 12, 31)}
+    # 🔧 CORRECTION : Suppression du 3 juillet des early closes
+    early_close_dates = {date(year, 11, 28), date(year, 12, 24), date(year, 12, 31)}
 
     if check_date in early_close_dates:
         return 'early_close'
@@ -562,15 +563,12 @@ def calculate_rsi(prices, period=14):
     return rsi.iloc[-1] if len(rsi) > 0 else None
 
 def get_stock_data(ticker, rate_limited_flag):
-    # 🔧 CORRECTION : Vérifier si le marché est fermé avant d'analyser
+    # 🔧 Vérification des marchés fermés
     now_mtl = datetime.now(MONTREAL_TZ)
     market_status = is_market_closed()
     
-    # Si c'est un ticker US (pas canadien) et que le marché US est fermé
     if ticker not in canadian_symbols and market_status in ('closed', 'us_closed'):
         return None
-    
-    # Si c'est un ticker CA et que le marché CA est fermé
     if ticker in canadian_symbols and market_status in ('closed', 'ca_closed'):
         return None
     
@@ -629,15 +627,12 @@ def get_stock_data(ticker, rate_limited_flag):
         return None
 
 def analyze_fnb(ticker):
-    # 🔧 CORRECTION : Vérifier si le marché est fermé avant d'analyser
+    # 🔧 Vérification des marchés fermés
     now_mtl = datetime.now(MONTREAL_TZ)
     market_status = is_market_closed()
     
-    # Si c'est un ETF US (pas .TO) et que le marché US est fermé
     if not ticker.endswith('.TO') and market_status in ('closed', 'us_closed'):
         return None
-    
-    # Si c'est un ETF CA (.TO) et que le marché CA est fermé
     if ticker.endswith('.TO') and market_status in ('closed', 'ca_closed'):
         return None
     
