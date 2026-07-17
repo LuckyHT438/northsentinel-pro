@@ -248,19 +248,124 @@ def get_exchange_from_info(info):
     }
     return exchange_map.get(exchange, exchange if exchange else 'US')
 
-def get_trail_percent(score, is_fnb=False):
+# ============================================
+# AJOUTS POUR LA CAPITALISATION (comme Core)
+# ============================================
+
+def get_market_cap_category(ticker):
+    """
+    Retourne la catégorie de capitalisation boursière d'un ticker
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        market_cap = info.get('marketCap', 0)
+        
+        if market_cap == 0:
+            return "N/A"
+        elif market_cap < 300_000_000:
+            return "Micro Cap"
+        elif market_cap < 2_000_000_000:
+            return "Small Cap"
+        elif market_cap < 10_000_000_000:
+            return "Mid Cap"
+        elif market_cap < 200_000_000_000:
+            return "Large Cap"
+        else:
+            return "Mega Cap"
+    except:
+        return "N/A"
+
+def get_cap_adjustment(cap_category):
+    """
+    Retourne les ajustements pour TP, SL et Trailing en fonction de la catégorie
+    """
+    adjustments = {
+        "Mega Cap": {"tp": 0.0, "sl": 0.0, "trail": 0.0},
+        "Large Cap": {"tp": 0.0, "sl": 0.0, "trail": 0.0},
+        "Mid Cap": {"tp": -0.002, "sl": 0.005, "trail": 0.005},
+        "Small Cap": {"tp": -0.005, "sl": 0.010, "trail": 0.010},
+        "Micro Cap": {"tp": -0.010, "sl": 0.015, "trail": 0.015},
+        "N/A": {"tp": 0.0, "sl": 0.0, "trail": 0.0}
+    }
+    return adjustments.get(cap_category, {"tp": 0.0, "sl": 0.0, "trail": 0.0})
+
+# === FONCTIONS DE RISQUE AVEC AJUSTEMENT CAPITALISATION ===
+
+def get_trail_percent(score, is_fnb=False, cap_category="Large Cap"):
+    """Retourne le pourcentage de trailing stop avec ajustement capitalisation"""
     if is_fnb:
-        if score >= 5: return 2.5
-        elif score == 4: return 3.0
-        elif score == 3: return 3.5
-        else: return 4.0
+        if score >= 5:
+            base = 2.5
+        elif score == 4:
+            base = 3.0
+        elif score == 3:
+            base = 3.5
+        else:
+            base = 4.0
     else:
-        if score >= 9: return 2.5
-        elif score == 8: return 3.0
-        elif score == 7: return 3.5
-        elif score == 6: return 4.0
-        elif score == 5: return 4.5
-        else: return 5.0
+        if score >= 9:
+            base = 2.5
+        elif score == 8:
+            base = 3.0
+        elif score == 7:
+            base = 3.5
+        elif score == 6:
+            base = 4.0
+        elif score == 5:
+            base = 4.5
+        else:
+            base = 5.0
+    
+    adj = get_cap_adjustment(cap_category)
+    return round(base + adj["trail"], 2)
+
+def get_tp_multiplier(score, gap, post_news=False, cap_category="Large Cap"):
+    """Retourne le multiplicateur de take-profit avec ajustement capitalisation"""
+    if score < 6:
+        if score == 5:
+            base = 1.010
+        else:
+            base = 1.005
+    elif gap >= 20:
+        base = 1.02 + (score - 4) * 0.006
+    elif gap >= 10:
+        base = 1.015 + (score - 4) * 0.004
+    else:
+        base = 1.005 + (score - 4) * 0.002
+    
+    adj = get_cap_adjustment(cap_category)
+    base = round(base + adj["tp"], 3)
+    
+    if post_news:
+        base = round(1.0 + (base - 1.0) * 0.833, 3)
+    return round(base, 3)
+
+def get_fnb_tp_multiplier(score, gap, post_news=False):
+    # Pas d'ajustement capitalisation pour les ETF
+    if score < 4:
+        base = 1.005
+    elif gap >= 6:
+        base = 1.015 + (score - 3) * 0.005
+    elif gap >= 3:
+        base = 1.01 + (score - 3) * 0.005
+    else:
+        base = 1.005 + (score - 3) * 0.005
+    if post_news:
+        base = round(1.0 + (base - 1.0) * 0.833, 3)
+    return round(base, 3)
+
+def get_sl_multiplier(score, cap_category="Large Cap"):
+    """Retourne le multiplicateur de stop-loss avec ajustement capitalisation"""
+    if score >= 8:
+        base = 0.97
+    elif score >= 6:
+        base = 0.96
+    else:
+        base = 0.95
+    
+    adj = get_cap_adjustment(cap_category)
+    return round(base - adj["sl"], 3)  # Élargit le stop en soustrayant
 
 def get_exit_time():
     now_mtl = datetime.now(MONTREAL_TZ)
@@ -280,34 +385,12 @@ def get_gap_min():
     else:
         return 2.0
 
-def get_tp_multiplier(score, gap, post_news=False):
-    if score < 6:
-        if score == 5: base = 1.010
-        else: base = 1.005
-    elif gap >= 20: base = 1.02 + (score - 4) * 0.006
-    elif gap >= 10: base = 1.015 + (score - 4) * 0.004
-    else: base = 1.005 + (score - 4) * 0.002
-    if post_news: base = round(1.0 + (base - 1.0) * 0.833, 3)
-    return round(base, 3)
-
-def get_fnb_tp_multiplier(score, gap, post_news=False):
-    if score < 4: base = 1.005
-    elif gap >= 6: base = 1.015 + (score - 3) * 0.005
-    elif gap >= 3: base = 1.01 + (score - 3) * 0.005
-    else: base = 1.005 + (score - 3) * 0.005
-    if post_news: base = round(1.0 + (base - 1.0) * 0.833, 3)
-    return round(base, 3)
-
-def get_sl_multiplier(score):
-    if score >= 8: return 0.97
-    elif score >= 6: return 0.96
-    else: return 0.95
-
 def calculate_quantity(entry_price, stop_price, capital, risk_per_trade, max_capital_per_position):
     risk_amount = capital * risk_per_trade
     max_exposure = capital * max_capital_per_position
     stop_distance = entry_price - stop_price
-    if stop_distance <= 0: return 0
+    if stop_distance <= 0:
+        return 0
     qty_risk = int(risk_amount / stop_distance)
     qty_cap = int(max_exposure / entry_price)
     return max(0, min(qty_risk, qty_cap))
@@ -332,10 +415,13 @@ def get_news_rss(ticker):
             try:
                 pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S %Z').replace(tzinfo=timezone.utc)
                 hours_ago = (now_utc - pub_date).total_seconds() / 3600
-                if hours_ago < 6: news_data.append({'title': title, 'hours_ago': hours_ago})
-            except: pass
+                if hours_ago < 6:
+                    news_data.append({'title': title, 'hours_ago': hours_ago})
+            except:
+                pass
         return news_data
-    except: return []
+    except:
+        return []
 
 def analyze_news_sentiment(title, summary=""):
     text = f"{title} {summary}".lower()
@@ -345,13 +431,21 @@ def analyze_news_sentiment(title, summary=""):
     bearish = ['loss','decline','drop','fall','warning','concern','risk','delay','delayed','suspended','halted','reduced','lowered','restructuring','layoff','impairment','write-down','debt']
     score = 0
     for word in bullish_strong:
-        if word in text: score += 2; break
+        if word in text:
+            score += 2
+            break
     for word in bullish:
-        if word in text: score += 1; break
+        if word in text:
+            score += 1
+            break
     for word in bearish_strong:
-        if word in text: score -= 2; break
+        if word in text:
+            score -= 2
+            break
     for word in bearish:
-        if word in text: score -= 1; break
+        if word in text:
+            score -= 1
+            break
     return score
 
 # === MODE POST-NEWS ===
@@ -404,7 +498,8 @@ def scrape_investing():
                             gmt_time = gmt_time.replace(tzinfo=timezone.utc)
                             et_time = gmt_time.astimezone(MONTREAL_TZ)
                             time_text = et_time.strftime('%H:%M')
-                        except: pass
+                        except:
+                            pass
                         news_events.append({'event': event_text, 'time': time_text, 'source': 'Investing.com'})
         print(f"📰 Investing.com: {len(news_events)} High Impact news found")
         return news_events
@@ -415,10 +510,13 @@ def scrape_investing():
 def is_high_impact_news(for_tomorrow=False):
     all_news = []
     ff_news = scrape_forexfactory()
-    if ff_news: all_news.extend(ff_news)
+    if ff_news:
+        all_news.extend(ff_news)
     inv_news = scrape_investing()
-    if inv_news: all_news.extend(inv_news)
-    if not all_news: return False, None
+    if inv_news:
+        all_news.extend(inv_news)
+    if not all_news:
+        return False, None
     unique_news = []
     seen_events = set()
     for news in all_news:
@@ -433,9 +531,11 @@ def is_high_impact_news(for_tomorrow=False):
                 news_time = datetime.strptime(news['time'], '%H:%M').time()
                 if news_time >= datetime.strptime('07:30', '%H:%M').time() and news_time <= datetime.strptime('11:00', '%H:%M').time():
                     tomorrow_news.append(news)
-            except: pass
+            except:
+                pass
         unique_news = tomorrow_news
-        if not unique_news: return False, None
+        if not unique_news:
+            return False, None
     print(f"📰 News check: {len(unique_news)} High Impact news | POST-NEWS ACTIVE")
     for n in unique_news:
         print(f"   • {n['event']} — {n['time']} ({n['source']})")
@@ -457,7 +557,8 @@ def get_tickers_from_alpha_vantage():
         tickers = [item.get('ticker','') for item in data.get('top_gainers',[])[:50] if item.get('ticker')]
         print(f"📊 Alpha Vantage: {len(tickers)} tickers")
         return tickers
-    except: return []
+    except:
+        return []
 
 def get_tickers_from_yahoo():
     try:
@@ -468,11 +569,13 @@ def get_tickers_from_yahoo():
         tickers = []
         for a in soup.find_all('a', href=re.compile(r'/quote/')):
             t = a.text.strip()
-            if t and t.isalpha() and 2 <= len(t) <= 5: tickers.append(t.upper())
+            if t and t.isalpha() and 2 <= len(t) <= 5:
+                tickers.append(t.upper())
         tickers = list(dict.fromkeys(tickers))[:30]
         print(f"📊 Yahoo Finance: {len(tickers)} tickers")
         return tickers
-    except: return []
+    except:
+        return []
 
 def get_tickers_from_finviz():
     try:
@@ -490,10 +593,12 @@ def get_tickers_from_finviz():
                     link = cols[1].find('a')
                     if link:
                         t = link.text.strip().upper()
-                        if t and t.isalpha() and 2 <= len(t) <= 5: tickers.append(t)
+                        if t and t.isalpha() and 2 <= len(t) <= 5:
+                            tickers.append(t)
         print(f"📊 Finviz: {len(tickers)} tickers")
         return tickers
-    except: return []
+    except:
+        return []
 
 def get_tickers_from_stockanalysis():
     try:
@@ -506,17 +611,22 @@ def get_tickers_from_stockanalysis():
             td = row.find('td')
             if td:
                 t = td.text.strip().upper()
-                if t and t.isalpha() and 2 <= len(t) <= 5: tickers.append(t)
+                if t and t.isalpha() and 2 <= len(t) <= 5:
+                    tickers.append(t)
         tickers = list(dict.fromkeys(tickers))[:30]
         print(f"📊 StockAnalysis: {len(tickers)} tickers")
         return tickers
-    except: return []
+    except:
+        return []
 
 def clean_ticker(t):
     t_upper = t.upper()
-    if t_upper.endswith('W') or t_upper.endswith('+') or t_upper.endswith('R'): return None
-    if t.count('.') > 1 or '/' in t: return None
-    if len(t) > 6: return None
+    if t_upper.endswith('W') or t_upper.endswith('+') or t_upper.endswith('R'):
+        return None
+    if t.count('.') > 1 or '/' in t:
+        return None
+    if len(t) > 6:
+        return None
     return t_upper
 
 def get_all_tickers(exclude_ca=False, exclude_us=False):
@@ -526,7 +636,8 @@ def get_all_tickers(exclude_ca=False, exclude_us=False):
     if not exclude_ca:
         ca_tickers = get_tickers_canada()
         for t in ca_tickers:
-            if t not in ca_clean: ca_clean.append(t)
+            if t not in ca_clean:
+                ca_clean.append(t)
 
     if not exclude_us:
         us_tickers = []
@@ -534,10 +645,12 @@ def get_all_tickers(exclude_ca=False, exclude_us=False):
             try:
                 batch = src()
                 us_tickers.extend(batch)
-            except: pass
+            except:
+                pass
         for t in list(dict.fromkeys(us_tickers)):
             clean = clean_ticker(t)
-            if clean and clean not in ca_clean and clean not in us_clean: us_clean.append(clean)
+            if clean and clean not in ca_clean and clean not in us_clean:
+                us_clean.append(clean)
 
     result = ca_clean + us_clean[:20]
     print(f"🎯 TOTAL STOCKS: {len(result)} tickers (CA: {len(ca_clean)}, US: {min(len(us_clean), 20)})")
@@ -588,37 +701,65 @@ def get_stock_data(ticker, rate_limited_flag):
             if pre_market and pre_market > 0:
                 price = pre_market
         
-        if not price or price < PRICE_MIN_ACTIONS or price > PRICE_MAX_ACTIONS: return None
+        if not price or price < PRICE_MIN_ACTIONS or price > PRICE_MAX_ACTIONS:
+            return None
         prev_close = info.get('previousClose')
-        if not prev_close: return None
+        if not prev_close:
+            return None
         gap = ((price - prev_close) / prev_close * 100)
         GAP_MIN = get_gap_min()
-        if gap > 50 or gap < GAP_MIN: return None
+        if gap > 50 or gap < GAP_MIN:
+            return None
         volume = info.get('volume', 0)
         is_canadian = ticker in canadian_symbols
         vol_min = 100_000 if is_canadian else 500_000
-        if volume < vol_min: return None
+        if volume < vol_min:
+            return None
         avg_volume = info.get('averageVolume', volume)
         vol_ratio = volume / avg_volume if avg_volume > 0 else 1
         score = 0
-        if 5 <= gap <= 40: score += 1
-        if vol_ratio > 1.5: score += 1
-        if info.get('floatShares', 0) < 50_000_000: score += 1
-        if info.get('beta', 0) > 1.0: score += 1
-        if info.get('shortRatio', 0) > 2: score += 1
+        if 5 <= gap <= 40:
+            score += 1
+        if vol_ratio > 1.5:
+            score += 1
+        if info.get('floatShares', 0) < 50_000_000:
+            score += 1
+        if info.get('beta', 0) > 1.0:
+            score += 1
+        if info.get('shortRatio', 0) > 2:
+            score += 1
         rsi_50 = info.get('fiftyDayAverage', 0)
         current_close = info.get('regularMarketPreviousClose', price)
-        if rsi_50 > 0 and current_close > rsi_50: score += 1
+        if rsi_50 > 0 and current_close > rsi_50:
+            score += 1
         news = get_news_rss(ticker)
         if news:
             for n in news[:3]:
                 sentiment = analyze_news_sentiment(n.get('title',''))
-                if sentiment >= 1: score += 1; break
-                elif sentiment <= -2: score -= 1; break
-        if score < SCORE_MIN_ACTIONS: return None
+                if sentiment >= 1:
+                    score += 1
+                    break
+                elif sentiment <= -2:
+                    score -= 1
+                    break
+        if score < SCORE_MIN_ACTIONS:
+            return None
         exchange = get_exchange_from_info(info)
-        trail_percent = get_trail_percent(score, is_fnb=False)
-        return {'ticker': ticker, 'exchange': exchange, 'price': price, 'gap': gap, 'score': score, 'vol_ratio': vol_ratio, 'trail_percent': trail_percent}
+        
+        # 🔧 Récupération de la catégorie de capitalisation
+        cap_category = get_market_cap_category(ticker)
+        trail_percent = get_trail_percent(score, is_fnb=False, cap_category=cap_category)
+        
+        return {
+            'ticker': ticker,
+            'exchange': exchange,
+            'price': price,
+            'gap': gap,
+            'score': score,
+            'vol_ratio': vol_ratio,
+            'trail_percent': trail_percent,
+            'cap_category': cap_category
+        }
     except Exception as e:
         err_str = str(e)
         if "429" in err_str or "Too Many Requests" in err_str:
@@ -641,7 +782,8 @@ def analyze_fnb(ticker):
         info = stock.info
         hist = stock.history(period="1mo")
         time.sleep(random.uniform(0.3, 0.5))
-        if hist.empty or len(hist) < 2: return None
+        if hist.empty or len(hist) < 2:
+            return None
         closes = hist['Close']
         volumes = hist['Volume']
         price = closes.iloc[-1]
@@ -654,8 +796,10 @@ def analyze_fnb(ticker):
         prev_close = closes.iloc[-2]
         volume = volumes.iloc[-1] if len(volumes) > 0 else 0
         avg_volume = volumes.mean() if len(volumes) > 0 else volume
-        if not price or price < 0.5 or price > PRICE_MAX_FNB: return None
-        if not prev_close: return None
+        if not price or price < 0.5 or price > PRICE_MAX_FNB:
+            return None
+        if not prev_close:
+            return None
         gap = ((price - prev_close) / prev_close * 100)
         crit_gap = 0.5 <= gap <= 8
         vol_ratio = volume / avg_volume if avg_volume > 0 else 1
@@ -673,23 +817,50 @@ def analyze_fnb(ticker):
             sma20 = closes.rolling(20).mean().iloc[-1]
             crit_sma = price > 0.70 * sma20
         score = sum([crit_gap, crit_vol, crit_aum, crit_rsi, crit_sma])
-        if score < SCORE_MIN_FNB: return None
+        if score < SCORE_MIN_FNB:
+            return None
         exchange = get_exchange_from_info(info)
+        # Les ETFs n'ont pas d'ajustement capitalisation, on garde l'ancien calcul
         trail_percent = get_trail_percent(score, is_fnb=True)
-        return {'ticker': ticker, 'exchange': exchange, 'price': price, 'gap': gap, 'score': score, 'vol_ratio': vol_ratio, 'aum_m': aum/1_000_000 if aum else 0, 'rsi': rsi, 'sma20': sma20, 'trail_percent': trail_percent}
-    except: return None
+        return {
+            'ticker': ticker,
+            'exchange': exchange,
+            'price': price,
+            'gap': gap,
+            'score': score,
+            'vol_ratio': vol_ratio,
+            'aum_m': aum/1_000_000 if aum else 0,
+            'rsi': rsi,
+            'sma20': sma20,
+            'trail_percent': trail_percent
+        }
+    except:
+        return None
 
 def format_capital(amount):
-    if amount >= 1_000_000: return f"{amount/1_000_000:.1f}M$"
-    elif amount >= 1_000: return f"{amount/1_000:.0f}k$"
-    else: return f"{amount}$"
+    if amount >= 1_000_000:
+        return f"{amount/1_000_000:.1f}M$"
+    elif amount >= 1_000:
+        return f"{amount/1_000:.0f}k$"
+    else:
+        return f"{amount}$"
 
 def save_signal_for_overnight(signals):
     try:
         data = []
         for signal, ticker_type in signals:
-            data.append({"ticker": signal['ticker'], "type": ticker_type, "entry_price": signal['price'], "score": signal['score'], "gap": signal['gap'], "vol_ratio": signal['vol_ratio'], "trail_percent": signal['trail_percent'], "date": datetime.now(MONTREAL_TZ).strftime('%Y-%m-%d')})
-        with open('pro_signals_today.json', 'w') as f: json.dump(data, f)
+            data.append({
+                "ticker": signal['ticker'],
+                "type": ticker_type,
+                "entry_price": signal['price'],
+                "score": signal['score'],
+                "gap": signal['gap'],
+                "vol_ratio": signal['vol_ratio'],
+                "trail_percent": signal['trail_percent'],
+                "date": datetime.now(MONTREAL_TZ).strftime('%Y-%m-%d')
+            })
+        with open('pro_signals_today.json', 'w') as f:
+            json.dump(data, f)
         print(f"💾 {len(data)} signal(s) saved for overnight check")
         return True
     except Exception as e:
@@ -698,7 +869,8 @@ def save_signal_for_overnight(signals):
 
 def load_previous_signal(ticker_type=None):
     try:
-        with open('pro_signals_today.json', 'r') as f: data = json.load(f)
+        with open('pro_signals_today.json', 'r') as f:
+            data = json.load(f)
         today = datetime.now(MONTREAL_TZ).strftime('%Y-%m-%d')
         if isinstance(data, list):
             for item in data:
@@ -709,9 +881,11 @@ def load_previous_signal(ticker_type=None):
             return None
         else:
             if data.get('date') == today and data.get('ticker'):
-                if ticker_type is None or data.get('type') == ticker_type: return data
+                if ticker_type is None or data.get('type') == ticker_type:
+                    return data
             return None
-    except FileNotFoundError: return None
+    except FileNotFoundError:
+        return None
     except Exception as e:
         print(f"❌ Signal load error: {e}")
         return None
@@ -846,8 +1020,8 @@ def main():
             best_action = sorted(buys_actions, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
             b = best_action
             buy_price = round(b['price'], 2)
-            tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow)
-            sl_mult = get_sl_multiplier(b['score'])
+            tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'))
+            sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'))
             sell_price = round(buy_price * tp_mult, 2)
             stop = round(buy_price * sl_mult, 2)
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
@@ -867,7 +1041,8 @@ def main():
             else:
                 verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
             
-            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b>\n"
+            cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
+            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){cap_display} | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b>\n"
             message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
             if sector_context['line']:
                 message += sector_context['line']
@@ -912,7 +1087,8 @@ def main():
             else:
                 verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
             
-            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b>\n"
+            aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
+            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){aum_display} | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b>\n"
             message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
             if sector_context_etf['line']:
                 message += sector_context_etf['line']
@@ -1054,8 +1230,8 @@ def main():
         best_action = sorted(buys_actions, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
         b = best_action
         buy_price = round(b['price'], 2)
-        tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news)
-        sl_mult = get_sl_multiplier(b['score'])
+        tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news, b.get('cap_category', 'Large Cap'))
+        sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'))
         sell_price = round(buy_price * tp_mult, 2)
         stop = round(buy_price * sl_mult, 2)
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
@@ -1075,7 +1251,8 @@ def main():
         else:
             verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
         
-        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b>\n"
+        cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
+        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){cap_display} | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b>\n"
         message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
         if sector_context['line']:
             message += sector_context['line']
@@ -1120,7 +1297,8 @@ def main():
         else:
             verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
         
-        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}) | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b>\n"
+        aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
+        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){aum_display} | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b>\n"
         message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
         if sector_context_etf['line']:
             message += sector_context_etf['line']
