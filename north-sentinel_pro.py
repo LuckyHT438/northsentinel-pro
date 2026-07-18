@@ -398,6 +398,20 @@ def _get_market_bias(ticker):
     else:
         return f"⚪ Neutral ({market_label})"
 
+def get_market_bias_adjustment(bias_text):
+    """
+    Retourne un tuple d'ajustements pour TP, SL et Trailing en fonction du bias.
+    Risk-on → on élargit légèrement (0.5% sur TP, 0.5% sur SL, 0.5% sur Trailing)
+    Risk-off → on resserre légèrement (-0.5% sur TP, -0.5% sur SL, -0.5% sur Trailing)
+    Neutral → pas d'ajustement
+    """
+    if "Risk-on" in bias_text:
+        return {"tp": 0.005, "sl": 0.005, "trail": 0.5}
+    elif "Risk-off" in bias_text:
+        return {"tp": -0.005, "sl": -0.005, "trail": -0.5}
+    else:
+        return {"tp": 0.0, "sl": 0.0, "trail": 0.0}
+
 # === FONCTION DE CATÉGORIE DE CAPITALISATION ===
 def get_market_cap_category(ticker):
     """
@@ -435,7 +449,7 @@ def get_cap_adjustment(cap_category):
     }
     return adjustments.get(cap_category, {"tp": 0.0, "sl": 0.0, "trail": 0.0})
 
-def get_trail_percent(score, is_fnb=False, cap_category="Large Cap"):
+def get_trail_percent(score, is_fnb=False, cap_category="Large Cap", market_bias=None):
     if is_fnb:
         if score >= 5: base = 2.5
         elif score == 4: base = 3.0
@@ -448,37 +462,42 @@ def get_trail_percent(score, is_fnb=False, cap_category="Large Cap"):
         elif score == 6: base = 4.0
         elif score == 5: base = 4.5
         else: base = 5.0
-    adj = get_cap_adjustment(cap_category)
-    return round(base + adj["trail"], 2)
+    cap_adj = get_cap_adjustment(cap_category)
+    bias_adj = get_market_bias_adjustment(market_bias) if market_bias else {"trail": 0.0}
+    return round(base + cap_adj["trail"] + bias_adj["trail"], 2)
 
-def get_tp_multiplier(score, gap, post_news=False, cap_category="Large Cap"):
+def get_tp_multiplier(score, gap, post_news=False, cap_category="Large Cap", market_bias=None):
     if score < 6:
         if score == 5: base = 1.010
         else: base = 1.005
     elif gap >= 20: base = 1.02 + (score - 4) * 0.006
     elif gap >= 10: base = 1.015 + (score - 4) * 0.004
     else: base = 1.005 + (score - 4) * 0.002
-    adj = get_cap_adjustment(cap_category)
-    base = round(base + adj["tp"], 3)
+    cap_adj = get_cap_adjustment(cap_category)
+    bias_adj = get_market_bias_adjustment(market_bias) if market_bias else {"tp": 0.0}
+    base = round(base + cap_adj["tp"] + bias_adj["tp"], 3)
     if post_news:
         base = round(1.0 + (base - 1.0) * 0.833, 3)
     return round(base, 3)
 
-def get_fnb_tp_multiplier(score, gap, post_news=False):
+def get_fnb_tp_multiplier(score, gap, post_news=False, market_bias=None):
     if score < 4: base = 1.005
     elif gap >= 6: base = 1.015 + (score - 3) * 0.005
     elif gap >= 3: base = 1.01 + (score - 3) * 0.005
     else: base = 1.005 + (score - 3) * 0.005
+    bias_adj = get_market_bias_adjustment(market_bias) if market_bias else {"tp": 0.0}
+    base = round(base + bias_adj["tp"], 3)
     if post_news:
         base = round(1.0 + (base - 1.0) * 0.833, 3)
     return round(base, 3)
 
-def get_sl_multiplier(score, cap_category="Large Cap"):
+def get_sl_multiplier(score, cap_category="Large Cap", market_bias=None):
     if score >= 8: base = 0.97
     elif score >= 6: base = 0.96
     else: base = 0.95
-    adj = get_cap_adjustment(cap_category)
-    return round(base - adj["sl"], 3)
+    cap_adj = get_cap_adjustment(cap_category)
+    bias_adj = get_market_bias_adjustment(market_bias) if market_bias else {"sl": 0.0}
+    return round(base - cap_adj["sl"] - bias_adj["sl"], 3)
 
 def calculate_quantity(entry_price, stop_price, capital, risk_per_trade, max_capital_per_position):
     risk_amount = capital * risk_per_trade
@@ -858,7 +877,8 @@ def get_stock_data(ticker, rate_limited_flag):
             return None
         exchange = get_exchange_from_info(info)
         cap_category = get_market_cap_category(ticker)
-        trail_percent = get_trail_percent(score, is_fnb=False, cap_category=cap_category)
+        market_bias = _get_market_bias(ticker)
+        trail_percent = get_trail_percent(score, is_fnb=False, cap_category=cap_category, market_bias=market_bias)
         
         return {
             'ticker': ticker,
@@ -868,7 +888,8 @@ def get_stock_data(ticker, rate_limited_flag):
             'score': score,
             'vol_ratio': vol_ratio,
             'trail_percent': trail_percent,
-            'cap_category': cap_category
+            'cap_category': cap_category,
+            'market_bias': market_bias
         }
     except Exception as e:
         err_str = str(e)
@@ -929,7 +950,9 @@ def analyze_fnb(ticker):
         if score < SCORE_MIN_FNB:
             return None
         exchange = get_exchange_from_info(info)
-        trail_percent = get_trail_percent(score, is_fnb=True)
+        market_bias = _get_market_bias(ticker)
+        trail_percent = get_trail_percent(score, is_fnb=True, market_bias=market_bias)
+        
         return {
             'ticker': ticker,
             'exchange': exchange,
@@ -940,7 +963,8 @@ def analyze_fnb(ticker):
             'aum_m': aum/1_000_000 if aum else 0,
             'rsi': rsi,
             'sma20': sma20,
-            'trail_percent': trail_percent
+            'trail_percent': trail_percent,
+            'market_bias': market_bias
         }
     except:
         return None
@@ -954,7 +978,7 @@ def format_capital(amount):
         return f"{amount}$"
 
 # === FONCTION DE SAUVEGARDE INCRÉMENTALE ===
-def save_pro_signal(ticker, signal_type, price, score, gap, vol_ratio, trail_percent, cap_category=None, aum_m=None):
+def save_pro_signal(ticker, signal_type, price, score, gap, vol_ratio, trail_percent, cap_category=None, aum_m=None, market_bias=None):
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         filepath = os.path.join(script_dir, 'pro_signals_today.json')
@@ -986,6 +1010,8 @@ def save_pro_signal(ticker, signal_type, price, score, gap, vol_ratio, trail_per
             new_signal["cap_category"] = str(cap_category)
         if aum_m is not None:
             new_signal["aum_m"] = float(round(aum_m, 1))
+        if market_bias:
+            new_signal["market_bias"] = str(market_bias)
         
         signals.append(new_signal)
         
@@ -1142,14 +1168,14 @@ def main():
             best_action = sorted(buys_actions, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
             b = best_action
             buy_price = round(b['price'], 2)
-            tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'))
-            sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'))
+            tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'), b.get('market_bias'))
+            sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'))
             sell_price = round(buy_price * tp_mult, 2)
             stop = round(buy_price * sl_mult, 2)
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
             
-            market_bias = _get_market_bias(b['ticker'])
+            market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
             cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
             
             vol_profile = get_volume_profile(b['ticker'], b['price'])
@@ -1191,7 +1217,8 @@ def main():
                 gap=b['gap'],
                 vol_ratio=b['vol_ratio'],
                 trail_percent=b['trail_percent'],
-                cap_category=b.get('cap_category', None)
+                cap_category=b.get('cap_category', None),
+                market_bias=b.get('market_bias')
             )
         else:
             message += f"❌ No Valid Stock for Overnight\n"
@@ -1203,13 +1230,13 @@ def main():
             best_fnb = sorted(buys_fnb, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
             b = best_fnb
             buy_price = round(b['price'], 2)
-            tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news_tomorrow)
+            tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('market_bias'))
             sell_price = round(buy_price * tp_mult, 2)
             stop = round(buy_price * 0.97, 2)
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
             
-            market_bias = _get_market_bias(b['ticker'])
+            market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
             aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
             
             vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
@@ -1251,7 +1278,8 @@ def main():
                 gap=b['gap'],
                 vol_ratio=b['vol_ratio'],
                 trail_percent=b['trail_percent'],
-                aum_m=b.get('aum_m', None)
+                aum_m=b.get('aum_m', None),
+                market_bias=b.get('market_bias')
             )
         else:
             message += f"❌ No Valid ETF for Overnight\n"
@@ -1380,14 +1408,14 @@ def main():
         best_action = sorted(buys_actions, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
         b = best_action
         buy_price = round(b['price'], 2)
-        tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news, b.get('cap_category', 'Large Cap'))
-        sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'))
+        tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news, b.get('cap_category', 'Large Cap'), b.get('market_bias'))
+        sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'))
         sell_price = round(buy_price * tp_mult, 2)
         stop = round(buy_price * sl_mult, 2)
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
         quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
         
-        market_bias = _get_market_bias(b['ticker'])
+        market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
         cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
         
         vol_profile = get_volume_profile(b['ticker'], b['price'])
@@ -1430,7 +1458,8 @@ def main():
                 gap=b['gap'],
                 vol_ratio=b['vol_ratio'],
                 trail_percent=b['trail_percent'],
-                cap_category=b.get('cap_category', None)
+                cap_category=b.get('cap_category', None),
+                market_bias=b.get('market_bias')
             )
     else:
         message += f"❌ No Valid Stock Identified\n"
@@ -1442,13 +1471,13 @@ def main():
         best_fnb = sorted(buys_fnb, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
         b = best_fnb
         buy_price = round(b['price'], 2)
-        tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news)
+        tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news, b.get('market_bias'))
         sell_price = round(buy_price * tp_mult, 2)
         stop = round(buy_price * 0.97, 2)
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
         quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
         
-        market_bias = _get_market_bias(b['ticker'])
+        market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
         aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
         
         vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
@@ -1491,7 +1520,8 @@ def main():
                 gap=b['gap'],
                 vol_ratio=b['vol_ratio'],
                 trail_percent=b['trail_percent'],
-                aum_m=b.get('aum_m', None)
+                aum_m=b.get('aum_m', None),
+                market_bias=b.get('market_bias')
             )
     else:
         message += f"❌ No Valid ETF Identified\n"
