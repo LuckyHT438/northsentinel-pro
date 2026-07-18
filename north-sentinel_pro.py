@@ -449,7 +449,25 @@ def get_cap_adjustment(cap_category):
     }
     return adjustments.get(cap_category, {"tp": 0.0, "sl": 0.0, "trail": 0.0})
 
-def get_trail_percent(score, is_fnb=False, cap_category="Large Cap", market_bias=None):
+# 🔧 PRO ADJUSTMENT: Ajustement basé sur le Confidence Score
+def get_confidence_adjustment(confidence):
+    """
+    Retourne les ajustements pour TP, SL et Trailing en fonction du Confidence Score.
+    Confidence > 8.5 → on peut viser plus large et resserrer les stops
+    Confidence < 5.5 → on réduit l’ambition et on élargit les stops
+    """
+    if confidence >= 8.5:
+        return {"tp": 0.010, "sl": -0.005, "trail": -0.5}   # TP +1%, SL -0.5%, trailing -0.5%
+    elif confidence >= 7.5:
+        return {"tp": 0.005, "sl": -0.002, "trail": -0.2}
+    elif confidence >= 5.5:
+        return {"tp": 0.0, "sl": 0.0, "trail": 0.0}
+    elif confidence >= 3.5:
+        return {"tp": -0.005, "sl": 0.010, "trail": 0.5}
+    else:
+        return {"tp": -0.010, "sl": 0.015, "trail": 1.0}
+
+def get_trail_percent(score, is_fnb=False, cap_category="Large Cap", market_bias=None, confidence=None):
     if is_fnb:
         if score >= 5: base = 2.5
         elif score == 4: base = 3.0
@@ -464,9 +482,10 @@ def get_trail_percent(score, is_fnb=False, cap_category="Large Cap", market_bias
         else: base = 5.0
     cap_adj = get_cap_adjustment(cap_category)
     bias_adj = get_market_bias_adjustment(market_bias) if market_bias else {"trail": 0.0}
-    return round(base + cap_adj["trail"] + bias_adj["trail"], 2)
+    conf_adj = get_confidence_adjustment(confidence) if confidence is not None else {"trail": 0.0}
+    return round(base + cap_adj["trail"] + bias_adj["trail"] + conf_adj["trail"], 2)
 
-def get_tp_multiplier(score, gap, post_news=False, cap_category="Large Cap", market_bias=None):
+def get_tp_multiplier(score, gap, post_news=False, cap_category="Large Cap", market_bias=None, confidence=None):
     if score < 6:
         if score == 5: base = 1.010
         else: base = 1.005
@@ -475,29 +494,32 @@ def get_tp_multiplier(score, gap, post_news=False, cap_category="Large Cap", mar
     else: base = 1.005 + (score - 4) * 0.002
     cap_adj = get_cap_adjustment(cap_category)
     bias_adj = get_market_bias_adjustment(market_bias) if market_bias else {"tp": 0.0}
-    base = round(base + cap_adj["tp"] + bias_adj["tp"], 3)
+    conf_adj = get_confidence_adjustment(confidence) if confidence is not None else {"tp": 0.0}
+    base = round(base + cap_adj["tp"] + bias_adj["tp"] + conf_adj["tp"], 3)
     if post_news:
         base = round(1.0 + (base - 1.0) * 0.833, 3)
     return round(base, 3)
 
-def get_fnb_tp_multiplier(score, gap, post_news=False, market_bias=None):
+def get_fnb_tp_multiplier(score, gap, post_news=False, market_bias=None, confidence=None):
     if score < 4: base = 1.005
     elif gap >= 6: base = 1.015 + (score - 3) * 0.005
     elif gap >= 3: base = 1.01 + (score - 3) * 0.005
     else: base = 1.005 + (score - 3) * 0.005
     bias_adj = get_market_bias_adjustment(market_bias) if market_bias else {"tp": 0.0}
-    base = round(base + bias_adj["tp"], 3)
+    conf_adj = get_confidence_adjustment(confidence) if confidence is not None else {"tp": 0.0}
+    base = round(base + bias_adj["tp"] + conf_adj["tp"], 3)
     if post_news:
         base = round(1.0 + (base - 1.0) * 0.833, 3)
     return round(base, 3)
 
-def get_sl_multiplier(score, cap_category="Large Cap", market_bias=None):
+def get_sl_multiplier(score, cap_category="Large Cap", market_bias=None, confidence=None):
     if score >= 8: base = 0.97
     elif score >= 6: base = 0.96
     else: base = 0.95
     cap_adj = get_cap_adjustment(cap_category)
     bias_adj = get_market_bias_adjustment(market_bias) if market_bias else {"sl": 0.0}
-    return round(base - cap_adj["sl"] - bias_adj["sl"], 3)
+    conf_adj = get_confidence_adjustment(confidence) if confidence is not None else {"sl": 0.0}
+    return round(base - cap_adj["sl"] - bias_adj["sl"] - conf_adj["sl"], 3)
 
 def calculate_quantity(entry_price, stop_price, capital, risk_per_trade, max_capital_per_position):
     risk_amount = capital * risk_per_trade
@@ -1168,19 +1190,24 @@ def main():
             best_action = sorted(buys_actions, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
             b = best_action
             buy_price = round(b['price'], 2)
-            tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'), b.get('market_bias'))
-            sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'))
+            
+            # Récupérer le volume profile et le confidence score
+            vol_profile = get_volume_profile(b['ticker'], b['price'])
+            confidence = calculate_confidence_score(b, vol_profile)
+            sector_context = get_macro_context(b['ticker'])
+            
+            # 🔧 PRO ADJUSTMENT: on passe le confidence total aux fonctions de calcul
+            tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'])
+            sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'])
+            trail_percent = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'])
+            
             sell_price = round(buy_price * tp_mult, 2)
             stop = round(buy_price * sl_mult, 2)
-            trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
+            trail_price = round(buy_price * (1 - trail_percent/100), 2)
             quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
             
             market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
             cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
-            
-            vol_profile = get_volume_profile(b['ticker'], b['price'])
-            confidence = calculate_confidence_score(b, vol_profile)
-            sector_context = get_macro_context(b['ticker'])
             
             if confidence['total'] >= 8.5:
                 verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
@@ -1206,7 +1233,7 @@ def main():
                 f"  📦 QTY TO BUY: {quantity} shares\n"
                 f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
                 f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
-                f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
+                f"  🔄 TRAILING STOP: ${trail_price} → {trail_percent}%\n"
             )
             # Sauvegarde overnight
             save_pro_signal(
@@ -1216,7 +1243,7 @@ def main():
                 score=b['score'],
                 gap=b['gap'],
                 vol_ratio=b['vol_ratio'],
-                trail_percent=b['trail_percent'],
+                trail_percent=trail_percent,
                 cap_category=b.get('cap_category', None),
                 market_bias=b.get('market_bias')
             )
@@ -1230,7 +1257,12 @@ def main():
             best_fnb = sorted(buys_fnb, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
             b = best_fnb
             buy_price = round(b['price'], 2)
-            tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('market_bias'))
+            
+            vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
+            confidence_etf = calculate_confidence_score(b, vol_profile_etf)
+            sector_context_etf = get_macro_context(b['ticker'])
+            
+            tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('market_bias'), confidence_etf['total'])
             sell_price = round(buy_price * tp_mult, 2)
             stop = round(buy_price * 0.97, 2)
             trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
@@ -1238,10 +1270,6 @@ def main():
             
             market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
             aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
-            
-            vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
-            confidence_etf = calculate_confidence_score(b, vol_profile_etf)
-            sector_context_etf = get_macro_context(b['ticker'])
             
             if confidence_etf['total'] >= 8.5:
                 verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
@@ -1408,19 +1436,22 @@ def main():
         best_action = sorted(buys_actions, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
         b = best_action
         buy_price = round(b['price'], 2)
-        tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news, b.get('cap_category', 'Large Cap'), b.get('market_bias'))
-        sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'))
-        sell_price = round(buy_price * tp_mult, 2)
-        stop = round(buy_price * sl_mult, 2)
-        trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
-        quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
-        
-        market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
-        cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
         
         vol_profile = get_volume_profile(b['ticker'], b['price'])
         confidence = calculate_confidence_score(b, vol_profile)
         sector_context = get_macro_context(b['ticker'])
+        
+        tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'])
+        sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'])
+        trail_percent = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'])
+        
+        sell_price = round(buy_price * tp_mult, 2)
+        stop = round(buy_price * sl_mult, 2)
+        trail_price = round(buy_price * (1 - trail_percent/100), 2)
+        quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+        
+        market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
+        cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
         
         if confidence['total'] >= 8.5:
             verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
@@ -1446,9 +1477,8 @@ def main():
             f"  📦 QTY TO BUY: {quantity} shares\n"
             f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
             f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
-            f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
+            f"  🔄 TRAILING STOP: ${trail_price} → {trail_percent}%\n"
         )
-        # Sauvegarde normal
         if should_save_signal(heure, minute):
             save_pro_signal(
                 ticker=b['ticker'],
@@ -1457,7 +1487,7 @@ def main():
                 score=b['score'],
                 gap=b['gap'],
                 vol_ratio=b['vol_ratio'],
-                trail_percent=b['trail_percent'],
+                trail_percent=trail_percent,
                 cap_category=b.get('cap_category', None),
                 market_bias=b.get('market_bias')
             )
@@ -1471,7 +1501,12 @@ def main():
         best_fnb = sorted(buys_fnb, key=lambda x: (x['score'], x['vol_ratio']), reverse=True)[0]
         b = best_fnb
         buy_price = round(b['price'], 2)
-        tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news, b.get('market_bias'))
+        
+        vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
+        confidence_etf = calculate_confidence_score(b, vol_profile_etf)
+        sector_context_etf = get_macro_context(b['ticker'])
+        
+        tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news, b.get('market_bias'), confidence_etf['total'])
         sell_price = round(buy_price * tp_mult, 2)
         stop = round(buy_price * 0.97, 2)
         trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
@@ -1479,10 +1514,6 @@ def main():
         
         market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
         aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
-        
-        vol_profile_etf = get_volume_profile(b['ticker'], b['price'])
-        confidence_etf = calculate_confidence_score(b, vol_profile_etf)
-        sector_context_etf = get_macro_context(b['ticker'])
         
         if confidence_etf['total'] >= 8.5:
             verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
@@ -1510,7 +1541,6 @@ def main():
             f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
             f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
         )
-        # Sauvegarde normal ETF
         if should_save_signal(heure, minute):
             save_pro_signal(
                 ticker=b['ticker'],
