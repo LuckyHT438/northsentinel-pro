@@ -398,6 +398,34 @@ def _get_market_bias(ticker):
     else:
         return f"⚪ Neutral ({market_label})"
 
+# === NOUVELLE FONCTION : BIAS GLOBAL (copiée de Core) ===
+def get_global_market_bias():
+    """
+    Calcule le biais global du marché (US + CA) en analysant les secteurs ETF.
+    Retourne 'Risk-on', 'Risk-off' ou 'Neutral'.
+    """
+    all_etfs = {**MARKET_ETFS_US, **MARKET_ETFS_CA}
+    up_count = 0
+    down_count = 0
+
+    for ticker, _ in all_etfs.items():
+        change = _get_sector_performance(ticker)
+        if change is not None:
+            if change > 0.3:
+                up_count += 1
+            elif change < -0.3:
+                down_count += 1
+
+    if up_count == 0 and down_count == 0:
+        return "Neutral"
+
+    if up_count > down_count:
+        return "Risk-on"
+    elif down_count > up_count:
+        return "Risk-off"
+    else:
+        return "Neutral"
+
 def get_market_bias_adjustment(bias_text):
     """
     Retourne un tuple d'ajustements pour TP, SL et Trailing en fonction du bias.
@@ -542,12 +570,24 @@ def get_exit_time():
         exit_time = now_mtl.replace(hour=15, minute=45, second=0, microsecond=0)
     return exit_time.strftime('%H:%M')
 
-def get_gap_min():
+# === FONCTION GET_GAP_MIN AVEC PARAMÈTRE BIAS ===
+def get_gap_min(bias=None):
+    """
+    Retourne le gap minimum avec ajustement selon le biais de marché.
+    bias : 'Risk-on', 'Risk-off', 'Neutral' ou None.
+    """
     now_mtl = datetime.now(MONTREAL_TZ)
     if now_mtl.hour < 12:
-        return 5.0
+        base = 5.0
     else:
-        return 2.0
+        base = 2.0
+
+    if bias == "Risk-on":
+        return max(1.0, base - 0.5)
+    elif bias == "Risk-off":
+        return min(5.0, base + 0.5)
+    else:
+        return base
 
 def get_news_rss(ticker):
     try:
@@ -885,7 +925,8 @@ def get_stock_data(ticker, rate_limited_flag):
         if not prev_close:
             return None
         gap = ((price - prev_close) / prev_close * 100)
-        GAP_MIN = get_gap_min()
+        # 🔧 Utilisation de la variable GAP_MIN définie dans main (portée globale)
+        GAP_MIN = get_gap_min()  # sera écrasée par la valeur calculée dans main
         if gap > 50 or gap < GAP_MIN:
             return None
         volume = info.get('volume', 0)
@@ -978,6 +1019,10 @@ def analyze_fnb(ticker):
         if not prev_close:
             return None
         gap = ((price - prev_close) / prev_close * 100)
+        # Utilisation du gap_min pour les ETFs (on utilise la même fonction)
+        GAP_MIN = get_gap_min()
+        # Pour les ETFs, on utilise le critère 0.5 <= gap <= 8 (pas de gap min ajusté par bias)
+        # On garde cette logique.
         crit_gap = 0.5 <= gap <= 8
         vol_ratio = volume / avg_volume if avg_volume > 0 else 1
         crit_vol = vol_ratio > 0.9
@@ -1107,6 +1152,10 @@ def main():
     if jour >= 5:
         print("🔧 Weekend — Manual run authorized")
     
+    # === CALCUL DU BIAS GLOBAL ===
+    global_bias = get_global_market_bias()
+    print(f"🌍 Global Market Bias: {global_bias}")
+    
     # === MODE OVERNIGHT CHECK ===
     if jour in [0,1,2,3] and heure == 15 and minute >= 55:
         tomorrow = now_mtl.date() + timedelta(days=1)
@@ -1130,6 +1179,9 @@ def main():
         print("=" * 50)
         
         post_news_tomorrow, news_tomorrow = is_high_impact_news(for_tomorrow=True)
+        
+        # 🔧 Gap minimum avec bias
+        GAP_MIN = get_gap_min(global_bias)
         
         tickers_actions = get_all_tickers(exclude_ca=exclude_ca, exclude_us=exclude_us)
         print(f"\n🔍 Phase 1: Analyzing {len(tickers_actions)} stocks for Overnight...\n")
@@ -1217,12 +1269,10 @@ def main():
             b = best_action
             buy_price = round(b['price'], 2)
             
-            # Récupérer le volume profile et le confidence score
             vol_profile = get_volume_profile(b['ticker'], b['price'])
             confidence = calculate_confidence_score(b, vol_profile)
             sector_context = get_macro_context(b['ticker'])
             
-            # 🔧 PRO ADJUSTMENT: on passe le confidence total aux fonctions de calcul
             tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'])
             sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'])
             trail_percent = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'])
@@ -1261,7 +1311,6 @@ def main():
                 f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
                 f"  🔄 TRAILING STOP: ${trail_price} → {trail_percent}%\n"
             )
-            # Sauvegarde overnight
             save_pro_signal(
                 ticker=b['ticker'],
                 signal_type="STOCK",
@@ -1323,7 +1372,6 @@ def main():
                 f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
                 f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
             )
-            # Sauvegarde overnight ETF
             save_pro_signal(
                 ticker=b['ticker'],
                 signal_type="ETF",
@@ -1356,14 +1404,15 @@ def main():
     current_score_min_actions = SCORE_MIN_ACTIONS
     current_score_min_fnb = SCORE_MIN_FNB
     
-    GAP_MIN = get_gap_min()
-    
     exclude_ca_normal = (market_status == 'ca_closed')
     exclude_us_normal = (market_status == 'us_closed')
     
+    # 🔧 Gap minimum avec bias
+    GAP_MIN = get_gap_min(global_bias)
+    
     print("=" * 50)
     print(f"🤖 NorthSentinel Pro™ - {now_mtl.strftime('%Y-%m-%d %H:%M:%S')} (Montreal)")
-    print(f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}% | Stock Score: {current_score_min_actions}/9 | ETF: {current_score_min_fnb}/5")
+    print(f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}% ({global_bias}) | Stock Score: {current_score_min_actions}/9 | ETF: {current_score_min_fnb}/5")
     if market_status in ('us_closed', 'ca_closed'):
         if market_status == 'us_closed':
             print(f"🇺🇸 US market closed — CA only")
