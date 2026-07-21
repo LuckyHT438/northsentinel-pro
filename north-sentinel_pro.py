@@ -695,83 +695,111 @@ def is_high_impact_news(for_tomorrow=False):
         print(f"   • {n['event']} — {n['time']} ({n['source']})")
     return True, unique_news
 
-# === SOURCES ACTIONS ===
+# ============================================================
+# 🔥 SOURCES DYNAMIQUES (copiées de Core)
+# ============================================================
+
 def get_tickers_canada():
     tickers = ["TD.TO","BMO.TO","BNS.TO","NA.TO","ENB.TO","SU.TO","CNQ.TO","SOBO.TO","FTS.TO","AQN.TO","H.TO","BEP-UN.TO","SHOP.TO","LSPD.TO","OTEX.TO","SPCX.TO","CAE.TO","MDA.TO","BBD-B.TO","L.TO","MRU.TO","CCO.TO","DOL.TO","CNR.TO","CP.TO","T.TO","BCE.TO","BHC.TO","CSH-UN.TO","AND.TO","AEM.TO","ABX.TO","WPM.TO","GRDG.TO","IFC.TO","SLF.TO","GWO.TO","MG.TO","RBA.TO","TFII.TO"]
     random.shuffle(tickers)
-    selected = tickers[:20]
+    selected = tickers[:20]   # 20 CA (vous pouvez passer à 25 si souhaité)
     print(f"📊 Canada: {len(selected)} tickers (out of 40)")
     return selected
 
-def get_tickers_from_alpha_vantage():
-    try:
-        url = "https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey=demo"
-        r = requests.get(url, timeout=8)
-        data = r.json()
-        tickers = [item.get('ticker','') for item in data.get('top_gainers',[])[:50] if item.get('ticker')]
-        print(f"📊 Alpha Vantage: {len(tickers)} tickers")
-        return tickers
-    except:
-        return []
-
-def get_tickers_from_yahoo():
+def get_dynamic_us_tickers():
+    """Retourne une liste de tickers US dynamiques (top gainers, losers, most-active)"""
+    tickers = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    # 1. Yahoo Finance - Gainers
     try:
         url = "https://finance.yahoo.com/gainers"
-        headers = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(url, headers=headers, timeout=8)
         soup = BeautifulSoup(r.content, 'html.parser')
-        tickers = []
         for a in soup.find_all('a', href=re.compile(r'/quote/')):
             t = a.text.strip()
             if t and t.isalpha() and 2 <= len(t) <= 5:
                 tickers.append(t.upper())
-        tickers = list(dict.fromkeys(tickers))[:30]
-        print(f"📊 Yahoo Finance: {len(tickers)} tickers")
-        return tickers
     except:
-        return []
-
-def get_tickers_from_finviz():
+        pass
+    
+    # 2. Yahoo Finance - Losers
     try:
-        url = "https://finviz.com/screener.ashx?v=111&ft=4"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        url = "https://finance.yahoo.com/losers"
         r = requests.get(url, headers=headers, timeout=8)
         soup = BeautifulSoup(r.content, 'html.parser')
-        table = soup.find('table', class_='screen-body-table')
-        tickers = []
-        if table:
-            rows = table.find_all('tr')[1:51]
-            for row in rows:
-                cols = row.find_all('td')
-                if len(cols) > 1:
-                    link = cols[1].find('a')
-                    if link:
-                        t = link.text.strip().upper()
-                        if t and t.isalpha() and 2 <= len(t) <= 5:
-                            tickers.append(t)
-        print(f"📊 Finviz: {len(tickers)} tickers")
-        return tickers
+        for a in soup.find_all('a', href=re.compile(r'/quote/')):
+            t = a.text.strip()
+            if t and t.isalpha() and 2 <= len(t) <= 5:
+                tickers.append(t.upper())
     except:
-        return []
-
-def get_tickers_from_stockanalysis():
+        pass
+    
+    # 3. Yahoo Finance - Most Active
     try:
-        url = "https://stockanalysis.com/list/gainers/"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        url = "https://finance.yahoo.com/most-active"
         r = requests.get(url, headers=headers, timeout=8)
         soup = BeautifulSoup(r.content, 'html.parser')
-        tickers = []
-        for row in soup.find_all('tr')[1:31]:
-            td = row.find('td')
-            if td:
-                t = td.text.strip().upper()
-                if t and t.isalpha() and 2 <= len(t) <= 5:
-                    tickers.append(t)
-        tickers = list(dict.fromkeys(tickers))[:30]
-        print(f"📊 StockAnalysis: {len(tickers)} tickers")
-        return tickers
+        for a in soup.find_all('a', href=re.compile(r'/quote/')):
+            t = a.text.strip()
+            if t and t.isalpha() and 2 <= len(t) <= 5:
+                tickers.append(t.upper())
     except:
-        return []
+        pass
+    
+    # 4. Alpha Vantage - Top Gainers (démo key)
+    try:
+        url = "https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey=demo"
+        r = requests.get(url, timeout=8)
+        data = r.json()
+        for item in data.get('top_gainers', [])[:30]:
+            t = item.get('ticker', '')
+            if t and t.isalpha() and 2 <= len(t) <= 5:
+                tickers.append(t.upper())
+    except:
+        pass
+    
+    # Déduplication et limitation
+    tickers = list(dict.fromkeys(tickers))[:40]
+    print(f"📊 Dynamic US: {len(tickers)} tickers")
+    return tickers
+
+def get_dynamic_etfs():
+    """Retourne une liste d'ETFs dynamiques (top volume) + liste fixe CA"""
+    tickers = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    # 1. Yahoo Finance - ETFs (top volume)
+    try:
+        url = "https://finance.yahoo.com/etfs"
+        r = requests.get(url, headers=headers, timeout=8)
+        soup = BeautifulSoup(r.content, 'html.parser')
+        for a in soup.find_all('a', href=re.compile(r'/quote/')):
+            t = a.text.strip()
+            if t and t.isalpha() and 2 <= len(t) <= 5:
+                tickers.append(t.upper())
+    except:
+        pass
+    
+    # 2. ETFs canadiens fixes (pour garantir une couverture CA)
+    ca_etfs = ["VMO.TO", "XMA.TO", "CHPS.TO", "VI.TO", "XGD.TO", "SOXU.TO", "XFN.TO", "ZUT.TO"]
+    tickers.extend(ca_etfs)
+    
+    # Déduplication
+    tickers = list(dict.fromkeys(tickers))
+    
+    # Séparer US et CA
+    us_etfs = [t for t in tickers if not t.endswith('.TO')]
+    ca_etfs_final = [t for t in tickers if t.endswith('.TO')]
+    
+    # Limiter à 15 US et 15 CA (garantir au moins 15 CA)
+    us_etfs = us_etfs[:15]
+    ca_etfs_final = ca_etfs_final[:15]
+    
+    # Fusionner et mélanger
+    result = us_etfs + ca_etfs_final
+    print(f"📊 Dynamic ETFs: {len(result)} tickers (US: {len(us_etfs)}, CA: {len(ca_etfs_final)})")
+    return result
 
 def clean_ticker(t):
     t_upper = t.upper()
@@ -794,24 +822,18 @@ def get_all_tickers(exclude_ca=False, exclude_us=False):
                 ca_clean.append(t)
 
     if not exclude_us:
-        us_tickers = []
-        for src in [get_tickers_from_alpha_vantage, get_tickers_from_yahoo, get_tickers_from_finviz, get_tickers_from_stockanalysis]:
-            try:
-                batch = src()
-                us_tickers.extend(batch)
-            except:
-                pass
-        for t in list(dict.fromkeys(us_tickers)):
+        us_tickers = get_dynamic_us_tickers()
+        for t in us_tickers:
             clean = clean_ticker(t)
             if clean and clean not in ca_clean and clean not in us_clean:
                 us_clean.append(clean)
 
-    result = ca_clean + us_clean[:20]
-    print(f"🎯 TOTAL STOCKS: {len(result)} tickers (CA: {len(ca_clean)}, US: {min(len(us_clean), 20)})")
+    result = ca_clean + us_clean[:25]   # 25 US
+    print(f"🎯 TOTAL STOCKS: {len(result)} tickers (CA: {len(ca_clean)}, US: {min(len(us_clean), 25)})")
     return result
 
 def get_fnb_list(exclude_ca=False, exclude_us=False):
-    all_fnb = ["FLKR","VMO.TO","EWT","XLF","XLE","ARKK","XMA.TO","CHPS.TO","EWJ","TLT","XLB","VI.TO","XGD.TO","SOXU.TO","XFN.TO","ZUT.TO"]
+    all_fnb = get_dynamic_etfs()
     
     if exclude_ca:
         all_fnb = [f for f in all_fnb if not f.endswith('.TO')]
@@ -820,6 +842,9 @@ def get_fnb_list(exclude_ca=False, exclude_us=False):
     
     print(f"🎯 TOTAL ETFs: {len(all_fnb)} tickers")
     return all_fnb
+
+# === FIN DES SOURCES DYNAMIQUES ===
+# ============================================================
 
 def calculate_rsi(prices, period=14):
     delta = prices.diff()
@@ -1060,6 +1085,7 @@ def should_save_signal(heure, minute):
         return True
     return False
 
+# === MAIN ===
 def main():
     START_TIME = time.time()
     now_mtl = datetime.now(MONTREAL_TZ)
