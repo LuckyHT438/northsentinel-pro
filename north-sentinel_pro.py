@@ -1343,6 +1343,14 @@ def main():
             sector_context = get_macro_context(b['ticker'])
             
             spread_pct = b.get('spread_pct', 0.0)
+            # --- Spread display avec montant en dollars (harmonisé avec Core) ---
+            if spread_pct > 0:
+                spread_usd = round((spread_pct / 100) * b['price'], 2)
+                spread_display = f" | Spread: {spread_pct:.2f}% (${spread_usd:.2f})"
+            else:
+                spread_display = ""
+            # --- Fin de la modification ---
+            
             tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
             sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
             trail_percent = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'], spread_pct=spread_pct)
@@ -1354,7 +1362,6 @@ def main():
             
             market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
             cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
-            spread_display = f" | Spread: {spread_pct:.2f}%" if spread_pct > 0 else ""
             
             if confidence['total'] >= 8.5:
                 verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
@@ -1410,6 +1417,14 @@ def main():
             sector_context_etf = get_macro_context(b['ticker'])
             
             spread_pct = b.get('spread_pct', 0.0)
+            # --- Spread display avec montant en dollars (harmonisé avec Core) ---
+            if spread_pct > 0:
+                spread_usd = round((spread_pct / 100) * b['price'], 2)
+                spread_display = f" | Spread: {spread_pct:.2f}% (${spread_usd:.2f})"
+            else:
+                spread_display = ""
+            # --- Fin de la modification ---
+            
             tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('market_bias'), confidence_etf['total'], spread_pct)
             sell_price = round(buy_price * tp_mult, 2)
             stop = round(buy_price * 0.97, 2)
@@ -1418,7 +1433,6 @@ def main():
             
             market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
             aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
-            spread_display = f" | Spread: {spread_pct:.2f}%" if spread_pct > 0 else ""
             
             if confidence_etf['total'] >= 8.5:
                 verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
@@ -1592,6 +1606,14 @@ def main():
         sector_context = get_macro_context(b['ticker'])
         
         spread_pct = b.get('spread_pct', 0.0)
+        # --- Spread display avec montant en dollars (harmonisé avec Core) ---
+        if spread_pct > 0:
+            spread_usd = round((spread_pct / 100) * b['price'], 2)
+            spread_display = f" | Spread: {spread_pct:.2f}% (${spread_usd:.2f})"
+        else:
+            spread_display = ""
+        # --- Fin de la modification ---
+        
         tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
         sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
         trail_percent = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'], spread_pct=spread_pct)
@@ -1603,7 +1625,6 @@ def main():
         
         market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
         cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
-        spread_display = f" | Spread: {spread_pct:.2f}%" if spread_pct > 0 else ""
         
         if confidence['total'] >= 8.5:
             verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
@@ -1660,6 +1681,14 @@ def main():
         sector_context_etf = get_macro_context(b['ticker'])
         
         spread_pct = b.get('spread_pct', 0.0)
+        # --- Spread display avec montant en dollars (harmonisé avec Core) ---
+        if spread_pct > 0:
+            spread_usd = round((spread_pct / 100) * b['price'], 2)
+            spread_display = f" | Spread: {spread_pct:.2f}% (${spread_usd:.2f})"
+        else:
+            spread_display = ""
+        # --- Fin de la modification ---
+        
         tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news, b.get('market_bias'), confidence_etf['total'], spread_pct)
         sell_price = round(buy_price * tp_mult, 2)
         stop = round(buy_price * 0.97, 2)
@@ -1668,7 +1697,6 @@ def main():
         
         market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
         aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
-        spread_display = f" | Spread: {spread_pct:.2f}%" if spread_pct > 0 else ""
         
         if confidence_etf['total'] >= 8.5:
             verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
