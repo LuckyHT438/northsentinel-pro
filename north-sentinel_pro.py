@@ -987,21 +987,42 @@ def get_stock_data(ticker, rate_limited_flag):
             return None
         avg_volume = info.get('averageVolume', volume)
         vol_ratio = volume / avg_volume if avg_volume > 0 else 1
+
+        # === CALCUL DU SCORE AVEC CRITÈRE N°9 ===
         score = 0
+        # 1. Gap
         if 5 <= gap <= 40:
             score += 1
+        # 2. Volume ratio
         if vol_ratio > 1.5:
             score += 1
-        if info.get('floatShares', 0) < 50_000_000:
-            score += 1
-        if info.get('beta', 0) > 1.0:
-            score += 1
-        if info.get('shortRatio', 0) > 2:
-            score += 1
+        # 3. Float (avec bonus si manquant)
+        float_shares = info.get('floatShares')
+        if float_shares is not None:
+            if float_shares < 50_000_000:
+                score += 1
+        else:
+            score += 1  # Bonus car donnée manquante (Critère n°9)
+        # 4. Bêta (avec bonus si manquant)
+        beta = info.get('beta')
+        if beta is not None:
+            if beta > 1.0:
+                score += 1
+        else:
+            score += 1  # Bonus car donnée manquante (Critère n°9)
+        # 5. Short ratio (avec bonus si manquant)
+        short_ratio = info.get('shortRatio')
+        if short_ratio is not None:
+            if short_ratio > 2:
+                score += 1
+        else:
+            score += 1  # Bonus car donnée manquante (Critère n°9)
+        # 6. Prix vs SMA50
         rsi_50 = info.get('fiftyDayAverage', 0)
         current_close = info.get('regularMarketPreviousClose', price)
         if rsi_50 > 0 and current_close > rsi_50:
             score += 1
+        # 7. News (positive ou négative)
         news = get_news_rss(ticker)
         if news:
             for n in news[:3]:
@@ -1012,6 +1033,8 @@ def get_stock_data(ticker, rate_limited_flag):
                 elif sentiment <= -2:
                     score -= 1
                     break
+        # === FIN CALCUL SCORE ===
+
         if score < SCORE_MIN_ACTIONS:
             return None
         exchange = get_exchange_from_info(info)
