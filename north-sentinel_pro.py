@@ -401,7 +401,6 @@ def _get_market_bias(ticker):
     else:
         return f"⚪ Neutral ({market_label})"
 
-# === NOUVELLE FONCTION : BIAS GLOBAL (copiée de Core) ===
 def get_global_market_bias():
     """
     Calcule le biais global du marché (US + CA) en analysant les secteurs ETF.
@@ -431,15 +430,14 @@ def get_global_market_bias():
 
 def get_market_bias_adjustment(bias_text):
     """
-    Retourne un tuple d'ajustements pour TP, SL et Trailing en fonction du bias.
-    Risk-on → on élargit légèrement (0.5% sur TP, 0.5% sur SL, 0.5% sur Trailing)
-    Risk-off → on resserre légèrement (-0.5% sur TP, -0.5% sur SL, -0.5% sur Trailing)
-    Neutral → pas d'ajustement
+    Retourne les ajustements pour TP, SL et Trailing en fonction du biais.
+    Risk-on → TP augmenté de 0.5%, SL réduit de 0.5% (plus serré), trailing réduit de 0.5%
+    Risk-off → TP réduit de 0.5%, SL augmenté de 0.5% (plus large), trailing augmenté de 0.5%
     """
     if "Risk-on" in bias_text:
-        return {"tp": 0.005, "sl": 0.005, "trail": 0.5}
+        return {"tp": 0.005, "sl": -0.005, "trail": -0.5}
     elif "Risk-off" in bias_text:
-        return {"tp": -0.005, "sl": -0.005, "trail": -0.5}
+        return {"tp": -0.005, "sl": 0.005, "trail": 0.5}
     else:
         return {"tp": 0.0, "sl": 0.0, "trail": 0.0}
 
@@ -468,14 +466,14 @@ def get_market_cap_category(ticker):
     except:
         return "N/A"
 
-# === AJUSTEMENTS SELON LA CAPITALISATION ===
+# === AJUSTEMENTS SELON LA CAPITALISATION (HARMONISÉ AVEC CORE) ===
 def get_cap_adjustment(cap_category):
     adjustments = {
         "Mega Cap": {"tp": 0.0, "sl": 0.0, "trail": 0.0},
         "Large Cap": {"tp": 0.0, "sl": 0.0, "trail": 0.0},
-        "Mid Cap": {"tp": -0.002, "sl": 0.005, "trail": 0.005},
-        "Small Cap": {"tp": -0.005, "sl": 0.010, "trail": 0.010},
-        "Micro Cap": {"tp": -0.010, "sl": 0.015, "trail": 0.015},
+        "Mid Cap": {"tp": -0.002, "sl": 0.002, "trail": 0.005},
+        "Small Cap": {"tp": -0.005, "sl": 0.005, "trail": 0.010},
+        "Micro Cap": {"tp": -0.010, "sl": 0.010, "trail": 0.015},
         "N/A": {"tp": 0.0, "sl": 0.0, "trail": 0.0}
     }
     return adjustments.get(cap_category, {"tp": 0.0, "sl": 0.0, "trail": 0.0})
@@ -590,6 +588,57 @@ def calculate_quantity(entry_price, stop_price, capital, risk_per_trade, max_cap
     qty_risk = int(risk_amount / stop_distance)
     qty_cap = int(max_exposure / entry_price)
     return max(0, min(qty_risk, qty_cap))
+
+# ============================================================
+# FONCTION DE GESTION DES RISQUES (MANDAT STRICT AVEC TRAILING CORRIGÉ)
+# IDENTIQUE À CELLE DU SCRIPT CORE
+# ============================================================
+def apply_risk_mandate(tp_mult, sl_mult, trail_pct, min_ratio=2.0, max_tp=5.0, max_sl=2.5, min_sl=0.5):
+    """
+    Applique les règles strictes NorthSentinel :
+    - TP ≤ max_tp (%)
+    - SL ≤ max_sl (%)
+    - Ratio R/R ≥ min_ratio (1:2 par défaut)
+    - SL min absolu = min_sl (en dessous -> rejet)
+    - Trailing Stop : doit être plus serré que le SL (pourcentage plus petit)
+      On le limite à 80% du SL, avec un plancher de 0.3% et un plafond de 5%.
+    Retourne (tp_mult, sl_mult, trail_pct) ou (None, None, None) si rejet.
+    """
+    tp_pct = round((tp_mult - 1) * 100, 2)
+    sl_pct = round((1 - sl_mult) * 100, 2)
+
+    # 1. Plafonds
+    tp_pct = min(tp_pct, max_tp)
+    sl_pct = min(sl_pct, max_sl)
+
+    # 2. Ratio 1:2 (on réduit le SL si nécessaire)
+    required_sl = tp_pct / min_ratio
+    if required_sl < sl_pct:
+        sl_pct = round(required_sl, 2)
+
+    # 3. SL minimum absolu -> rejet si trop serré
+    if sl_pct < min_sl:
+        print(f"❌ Trade REJETÉ : SL trop serré ({sl_pct:.2f}%)")
+        return None, None, None
+
+    # 4. Multiplicateurs finaux
+    final_tp_mult = round(1 + tp_pct / 100, 3)
+    final_sl_mult = round(1 - sl_pct / 100, 3)
+
+    # 5. Trailing Stop : doit être plus serré que le SL (max 80% du SL)
+    max_allowed_trail = sl_pct * 0.8  # par exemple SL 2% -> trail max 1.6%
+    if trail_pct > max_allowed_trail:
+        trail_pct = round(max_allowed_trail, 2)
+    # Plancher de sécurité (pour éviter d'être trop serré)
+    if trail_pct < 0.3:
+        trail_pct = 0.3
+    # Plafond absolu
+    if trail_pct > 5.0:
+        trail_pct = 5.0
+
+    return final_tp_mult, final_sl_mult, trail_pct
+
+# ============================================================
 
 def get_exit_time():
     now_mtl = datetime.now(MONTREAL_TZ)
@@ -774,7 +823,7 @@ def is_high_impact_news(for_tomorrow=False):
 def get_tickers_canada():
     tickers = ["TD.TO","BMO.TO","BNS.TO","NA.TO","ENB.TO","SU.TO","CNQ.TO","SOBO.TO","FTS.TO","AQN.TO","H.TO","BEP-UN.TO","SHOP.TO","LSPD.TO","OTEX.TO","SPCX.TO","CAE.TO","MDA.TO","BBD-B.TO","L.TO","MRU.TO","CCO.TO","DOL.TO","CNR.TO","CP.TO","T.TO","BCE.TO","BHC.TO","CSH-UN.TO","AND.TO","AEM.TO","ABX.TO","WPM.TO","GRDG.TO","IFC.TO","SLF.TO","GWO.TO","MG.TO","RBA.TO","TFII.TO"]
     random.shuffle(tickers)
-    selected = tickers[:20]   # 20 CA (vous pouvez passer à 25 si souhaité)
+    selected = tickers[:20]
     print(f"📊 Canada: {len(selected)} tickers (out of 40)")
     return selected
 
@@ -900,7 +949,7 @@ def get_all_tickers(exclude_ca=False, exclude_us=False):
             if clean and clean not in ca_clean and clean not in us_clean:
                 us_clean.append(clean)
 
-    result = ca_clean + us_clean[:25]   # 25 US
+    result = ca_clean + us_clean[:25]
     print(f"🎯 TOTAL STOCKS: {len(result)} tickers (CA: {len(ca_clean)}, US: {min(len(us_clean), 25)})")
     return result
 
@@ -1324,7 +1373,7 @@ def main():
         
         elapsed = time.time() - START_TIME
         
-        # === TELEGRAM MESSAGE - PRO OVERNIGHT ===
+        # === TELEGRAM MESSAGE - PRO OVERNIGHT (EN-TÊTE HARMONISÉ) ===
         scope_label = "US/CA"
         if exclude_ca:
             scope_label = "US Only"
@@ -1338,6 +1387,9 @@ def main():
         elif exclude_us:
             message += f"🇺🇸 US market closed — CA setups only\n"
         message += f"📅 {now_mtl.strftime('%Y-%m-%d %H:%M')} (Montreal)\n"
+        message += f"💰 Capital: {format_capital(CAPITAL)} | Min Gap: {GAP_MIN}%\n"
+        if market_status == 'early_close':
+            message += f"⚠️ EARLY CLOSE TODAY (1:00 PM ET)\n"
         message += "═" * 35 + "\n"
         
         if post_news_tomorrow and news_tomorrow:
@@ -1372,58 +1424,64 @@ def main():
                 spread_display = f" | Spread: {spread_pct:.2f}% (${spread_usd:.2f})"
             else:
                 spread_display = ""
-            # --- Fin de la modification ---
             
-            tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
-            sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
-            trail_percent = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'], spread_pct=spread_pct)
+            # Calculs bruts
+            tp_mult_brut = get_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
+            sl_mult_brut = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
+            trail_pct_brut = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'], spread_pct=spread_pct)
             
-            sell_price = round(buy_price * tp_mult, 2)
-            stop = round(buy_price * sl_mult, 2)
-            trail_price = round(buy_price * (1 - trail_percent/100), 2)
-            quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
-            
-            market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
-            cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
-            
-            if confidence['total'] >= 8.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
-            elif confidence['total'] >= 7.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
-            elif confidence['total'] >= 5.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
-            elif confidence['total'] >= 3.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
+            # Application du mandat strict
+            tp_mult, sl_mult, trail_pct = apply_risk_mandate(tp_mult_brut, sl_mult_brut, trail_pct_brut)
+            if tp_mult is None:
+                message += f"❌ No Valid Stock for Overnight (rejected: SL too tight)\n"
+                message += f"⏰ Until next time!\n"
             else:
-                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
-            
-            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){cap_display}{spread_display} | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b> | {market_bias}\n"
-            message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
-            if sector_context['line']:
-                message += sector_context['line']
-            message += f"  💵 CUR. PRICE: ${b['price']}\n"
-            if vol_profile['line']:
-                message += vol_profile['line']
-            message += verdict_line
-            message += (
-                f"  🎯 ENTRY PRICE: ${buy_price}\n"
-                f"  📦 QTY TO BUY: {quantity} shares\n"
-                f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
-                f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
-                f"  🔄 TRAILING STOP: ${trail_price} → {trail_percent}%\n"
-            )
-            save_pro_signal(
-                ticker=b['ticker'],
-                signal_type="STOCK",
-                price=b['price'],
-                score=b['score'],
-                gap=b['gap'],
-                vol_ratio=b['vol_ratio'],
-                trail_percent=trail_percent,
-                cap_category=b.get('cap_category', None),
-                market_bias=b.get('market_bias'),
-                spread_pct=spread_pct
-            )
+                sell_price = round(buy_price * tp_mult, 2)
+                stop = round(buy_price * sl_mult, 2)
+                trail_price = round(buy_price * (1 - trail_pct/100), 2)
+                quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+                
+                market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
+                cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
+                
+                if confidence['total'] >= 8.5:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
+                elif confidence['total'] >= 7.5:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
+                elif confidence['total'] >= 5.5:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
+                elif confidence['total'] >= 3.5:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
+                else:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
+                
+                message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){cap_display}{spread_display} | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b> | {market_bias}\n"
+                message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
+                if sector_context['line']:
+                    message += sector_context['line']
+                message += f"  💵 CUR. PRICE: ${b['price']}\n"
+                if vol_profile['line']:
+                    message += vol_profile['line']
+                message += verdict_line
+                message += (
+                    f"  🎯 ENTRY PRICE: ${buy_price}\n"
+                    f"  📦 QTY TO BUY: {quantity} shares\n"
+                    f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
+                    f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
+                    f"  🔄 TRAILING STOP: ${trail_price} → {trail_pct}%\n"
+                )
+                save_pro_signal(
+                    ticker=b['ticker'],
+                    signal_type="STOCK",
+                    price=b['price'],
+                    score=b['score'],
+                    gap=b['gap'],
+                    vol_ratio=b['vol_ratio'],
+                    trail_percent=trail_pct,
+                    cap_category=b.get('cap_category', None),
+                    market_bias=b.get('market_bias'),
+                    spread_pct=spread_pct
+                )
         else:
             message += f"❌ No Valid Stock for Overnight\n"
             message += f"⏰ Until next time!\n"
@@ -1440,61 +1498,67 @@ def main():
             sector_context_etf = get_macro_context(b['ticker'])
             
             spread_pct = b.get('spread_pct', 0.0)
-            # --- Spread display avec montant en dollars (harmonisé avec Core) ---
             if spread_pct > 0:
                 spread_usd = round((spread_pct / 100) * b['price'], 2)
                 spread_display = f" | Spread: {spread_pct:.2f}% (${spread_usd:.2f})"
             else:
                 spread_display = ""
-            # --- Fin de la modification ---
             
-            tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('market_bias'), confidence_etf['total'], spread_pct)
-            sell_price = round(buy_price * tp_mult, 2)
-            stop = round(buy_price * 0.97, 2)
-            trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
-            quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+            tp_mult_brut = get_fnb_tp_multiplier(b['score'], b['gap'], post_news_tomorrow, b.get('market_bias'), confidence_etf['total'], spread_pct)
+            sl_mult_brut = get_sl_multiplier(b['score'], "Large Cap", b.get('market_bias'), confidence_etf['total'], spread_pct)
+            trail_pct_brut = get_trail_percent(b['score'], is_fnb=True, market_bias=b.get('market_bias'), confidence=confidence_etf['total'], spread_pct=spread_pct)
             
-            market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
-            aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
-            
-            if confidence_etf['total'] >= 8.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
-            elif confidence_etf['total'] >= 7.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
-            elif confidence_etf['total'] >= 5.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
-            elif confidence_etf['total'] >= 3.5:
-                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
+            tp_mult, sl_mult, trail_pct = apply_risk_mandate(tp_mult_brut, sl_mult_brut, trail_pct_brut, max_sl=2.5, max_tp=5.0, min_sl=0.5)
+            if tp_mult is None:
+                message += f"❌ No Valid ETF for Overnight (rejected: SL too tight)\n"
+                message += f"⏰ Until next time!\n"
             else:
-                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
-            
-            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){aum_display}{spread_display} | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b> | {market_bias}\n"
-            message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
-            if sector_context_etf['line']:
-                message += sector_context_etf['line']
-            message += f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
-            if vol_profile_etf['line']:
-                message += vol_profile_etf['line']
-            message += verdict_line
-            message += (
-                f"  🎯 ENTRY PRICE: ${buy_price}\n"
-                f"  📦 QTY TO BUY: {quantity} units\n"
-                f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
-                f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
-                f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
-            )
-            save_pro_signal(
-                ticker=b['ticker'],
-                signal_type="ETF",
-                price=b['price'],
-                score=b['score'],
-                gap=b['gap'],
-                vol_ratio=b['vol_ratio'],
-                trail_percent=b['trail_percent'],
-                aum_m=b.get('aum_m', None),
-                market_bias=b.get('market_bias'),
-                spread_pct=spread_pct
-            )
+                sell_price = round(buy_price * tp_mult, 2)
+                stop = round(buy_price * sl_mult, 2)
+                trail_price = round(buy_price * (1 - trail_pct/100), 2)
+                quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+                
+                market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
+                aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
+                
+                if confidence_etf['total'] >= 8.5:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
+                elif confidence_etf['total'] >= 7.5:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
+                elif confidence_etf['total'] >= 5.5:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
+                elif confidence_etf['total'] >= 3.5:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
+                else:
+                    verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
+                
+                message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){aum_display}{spread_display} | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b> | {market_bias}\n"
+                message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
+                if sector_context_etf['line']:
+                    message += sector_context_etf['line']
+                message += f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
+                if vol_profile_etf['line']:
+                    message += vol_profile_etf['line']
+                message += verdict_line
+                message += (
+                    f"  🎯 ENTRY PRICE: ${buy_price}\n"
+                    f"  📦 QTY TO BUY: {quantity} units\n"
+                    f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
+                    f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
+                    f"  🔄 TRAILING STOP: ${trail_price} → {trail_pct}%\n"
+                )
+                save_pro_signal(
+                    ticker=b['ticker'],
+                    signal_type="ETF",
+                    price=b['price'],
+                    score=b['score'],
+                    gap=b['gap'],
+                    vol_ratio=b['vol_ratio'],
+                    trail_percent=trail_pct,
+                    aum_m=b.get('aum_m', None),
+                    market_bias=b.get('market_bias'),
+                    spread_pct=spread_pct
+                )
         else:
             message += f"❌ No Valid ETF for Overnight\n"
             message += f"⏰ Until next time!\n"
@@ -1629,65 +1693,68 @@ def main():
         sector_context = get_macro_context(b['ticker'])
         
         spread_pct = b.get('spread_pct', 0.0)
-        # --- Spread display avec montant en dollars (harmonisé avec Core) ---
         if spread_pct > 0:
             spread_usd = round((spread_pct / 100) * b['price'], 2)
             spread_display = f" | Spread: {spread_pct:.2f}% (${spread_usd:.2f})"
         else:
             spread_display = ""
-        # --- Fin de la modification ---
         
-        tp_mult = get_tp_multiplier(b['score'], b['gap'], post_news, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
-        sl_mult = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
-        trail_percent = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'], spread_pct=spread_pct)
+        tp_mult_brut = get_tp_multiplier(b['score'], b['gap'], post_news, b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
+        sl_mult_brut = get_sl_multiplier(b['score'], b.get('cap_category', 'Large Cap'), b.get('market_bias'), confidence['total'], spread_pct)
+        trail_pct_brut = get_trail_percent(b['score'], is_fnb=False, cap_category=b.get('cap_category', 'Large Cap'), market_bias=b.get('market_bias'), confidence=confidence['total'], spread_pct=spread_pct)
         
-        sell_price = round(buy_price * tp_mult, 2)
-        stop = round(buy_price * sl_mult, 2)
-        trail_price = round(buy_price * (1 - trail_percent/100), 2)
-        quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
-        
-        market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
-        cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
-        
-        if confidence['total'] >= 8.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
-        elif confidence['total'] >= 7.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
-        elif confidence['total'] >= 5.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
-        elif confidence['total'] >= 3.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
+        tp_mult, sl_mult, trail_pct = apply_risk_mandate(tp_mult_brut, sl_mult_brut, trail_pct_brut)
+        if tp_mult is None:
+            message += f"❌ No Valid Stock Identified (rejected: SL too tight)\n"
+            message += f"⏰ Until next time!\n"
         else:
-            verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
-        
-        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){cap_display}{spread_display} | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b> | {market_bias}\n"
-        message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
-        if sector_context['line']:
-            message += sector_context['line']
-        message += f"  💵 CUR. PRICE: ${b['price']}\n"
-        if vol_profile['line']:
-            message += vol_profile['line']
-        message += verdict_line
-        message += (
-            f"  🎯 ENTRY PRICE: ${buy_price}\n"
-            f"  📦 QTY TO BUY: {quantity} shares\n"
-            f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
-            f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
-            f"  🔄 TRAILING STOP: ${trail_price} → {trail_percent}%\n"
-        )
-        if should_save_signal(heure, minute):
-            save_pro_signal(
-                ticker=b['ticker'],
-                signal_type="STOCK",
-                price=b['price'],
-                score=b['score'],
-                gap=b['gap'],
-                vol_ratio=b['vol_ratio'],
-                trail_percent=trail_percent,
-                cap_category=b.get('cap_category', None),
-                market_bias=b.get('market_bias'),
-                spread_pct=spread_pct
+            sell_price = round(buy_price * tp_mult, 2)
+            stop = round(buy_price * sl_mult, 2)
+            trail_price = round(buy_price * (1 - trail_pct/100), 2)
+            quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+            
+            market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
+            cap_display = f" | {b.get('cap_category', 'N/A')}" if 'cap_category' in b else ""
+            
+            if confidence['total'] >= 8.5:
+                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
+            elif confidence['total'] >= 7.5:
+                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
+            elif confidence['total'] >= 5.5:
+                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
+            elif confidence['total'] >= 3.5:
+                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
+            else:
+                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
+            
+            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){cap_display}{spread_display} | Quality: <b>{b['score']}/9</b> | 🎯 Confidence: <b>{confidence['total']}/10</b> | {market_bias}\n"
+            message += f"  📊 GAP: {b['gap']:.1f}% | VOL: x{b['vol_ratio']:.1f}\n"
+            if sector_context['line']:
+                message += sector_context['line']
+            message += f"  💵 CUR. PRICE: ${b['price']}\n"
+            if vol_profile['line']:
+                message += vol_profile['line']
+            message += verdict_line
+            message += (
+                f"  🎯 ENTRY PRICE: ${buy_price}\n"
+                f"  📦 QTY TO BUY: {quantity} shares\n"
+                f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
+                f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
+                f"  🔄 TRAILING STOP: ${trail_price} → {trail_pct}%\n"
             )
+            if should_save_signal(heure, minute):
+                save_pro_signal(
+                    ticker=b['ticker'],
+                    signal_type="STOCK",
+                    price=b['price'],
+                    score=b['score'],
+                    gap=b['gap'],
+                    vol_ratio=b['vol_ratio'],
+                    trail_percent=trail_pct,
+                    cap_category=b.get('cap_category', None),
+                    market_bias=b.get('market_bias'),
+                    spread_pct=spread_pct
+                )
     else:
         message += f"❌ No Valid Stock Identified\n"
         message += f"⏰ Until next time!\n"
@@ -1704,62 +1771,68 @@ def main():
         sector_context_etf = get_macro_context(b['ticker'])
         
         spread_pct = b.get('spread_pct', 0.0)
-        # --- Spread display avec montant en dollars (harmonisé avec Core) ---
         if spread_pct > 0:
             spread_usd = round((spread_pct / 100) * b['price'], 2)
             spread_display = f" | Spread: {spread_pct:.2f}% (${spread_usd:.2f})"
         else:
             spread_display = ""
-        # --- Fin de la modification ---
         
-        tp_mult = get_fnb_tp_multiplier(b['score'], b['gap'], post_news, b.get('market_bias'), confidence_etf['total'], spread_pct)
-        sell_price = round(buy_price * tp_mult, 2)
-        stop = round(buy_price * 0.97, 2)
-        trail_price = round(buy_price * (1 - b['trail_percent']/100), 2)
-        quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+        tp_mult_brut = get_fnb_tp_multiplier(b['score'], b['gap'], post_news, b.get('market_bias'), confidence_etf['total'], spread_pct)
+        sl_mult_brut = get_sl_multiplier(b['score'], "Large Cap", b.get('market_bias'), confidence_etf['total'], spread_pct)
+        trail_pct_brut = get_trail_percent(b['score'], is_fnb=True, market_bias=b.get('market_bias'), confidence=confidence_etf['total'], spread_pct=spread_pct)
         
-        market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
-        aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
-        
-        if confidence_etf['total'] >= 8.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
-        elif confidence_etf['total'] >= 7.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
-        elif confidence_etf['total'] >= 5.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
-        elif confidence_etf['total'] >= 3.5:
-            verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
+        tp_mult, sl_mult, trail_pct = apply_risk_mandate(tp_mult_brut, sl_mult_brut, trail_pct_brut, max_sl=2.5, max_tp=5.0, min_sl=0.5)
+        if tp_mult is None:
+            message += f"❌ No Valid ETF Identified (rejected: SL too tight)\n"
+            message += f"⏰ Until next time!\n"
         else:
-            verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
-        
-        message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){aum_display}{spread_display} | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b> | {market_bias}\n"
-        message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
-        if sector_context_etf['line']:
-            message += sector_context_etf['line']
-        message += f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
-        if vol_profile_etf['line']:
-            message += vol_profile_etf['line']
-        message += verdict_line
-        message += (
-            f"  🎯 ENTRY PRICE: ${buy_price}\n"
-            f"  📦 QTY TO BUY: {quantity} units\n"
-            f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
-            f"  🛑 STOP LOSS: ${stop} (3.0%)\n"
-            f"  🔄 TRAILING STOP: ${trail_price} → {b['trail_percent']}%\n"
-        )
-        if should_save_signal(heure, minute):
-            save_pro_signal(
-                ticker=b['ticker'],
-                signal_type="ETF",
-                price=b['price'],
-                score=b['score'],
-                gap=b['gap'],
-                vol_ratio=b['vol_ratio'],
-                trail_percent=b['trail_percent'],
-                aum_m=b.get('aum_m', None),
-                market_bias=b.get('market_bias'),
-                spread_pct=spread_pct
+            sell_price = round(buy_price * tp_mult, 2)
+            stop = round(buy_price * sl_mult, 2)
+            trail_price = round(buy_price * (1 - trail_pct/100), 2)
+            quantity = calculate_quantity(buy_price, stop, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+            
+            market_bias = b.get('market_bias', '⚪ Neutral (N/A)')
+            aum_display = f" (AUM: {b.get('aum_m', 0):.1f}M$)" if b.get('aum_m', 0) > 0 else ""
+            
+            if confidence_etf['total'] >= 8.5:
+                verdict_line = f"  ⚖️ <b>VERDICT: Strong setup</b> 🟢\n"
+            elif confidence_etf['total'] >= 7.5:
+                verdict_line = f"  ⚖️ <b>VERDICT: Favorable setup</b> 🟢\n"
+            elif confidence_etf['total'] >= 5.5:
+                verdict_line = f"  ⚖️ <b>VERDICT: Mixed setup</b> 🟡\n"
+            elif confidence_etf['total'] >= 3.5:
+                verdict_line = f"  ⚖️ <b>VERDICT: Weak setup</b> 🟠\n"
+            else:
+                verdict_line = f"  ⚖️ <b>VERDICT: Poor setup</b> 🔴\n"
+            
+            message += f"\n🔹 <b>{b['ticker']}</b> ({b['exchange']}){aum_display}{spread_display} | Quality: <b>{b['score']}/5</b> | 🎯 Confidence: <b>{confidence_etf['total']}/10</b> | {market_bias}\n"
+            message += f"  📊 GAP: {b['gap']:.2f}% | VOL: x{b['vol_ratio']:.2f}\n"
+            if sector_context_etf['line']:
+                message += sector_context_etf['line']
+            message += f"  💵 CUR. PRICE: ${b['price']:.2f}\n"
+            if vol_profile_etf['line']:
+                message += vol_profile_etf['line']
+            message += verdict_line
+            message += (
+                f"  🎯 ENTRY PRICE: ${buy_price}\n"
+                f"  📦 QTY TO BUY: {quantity} units\n"
+                f"  📈 TAKE-PROFIT: ${sell_price} (+{round((tp_mult - 1) * 100, 1)}%)\n"
+                f"  🛑 STOP LOSS: ${stop} ({round((1 - sl_mult) * 100, 1)}%)\n"
+                f"  🔄 TRAILING STOP: ${trail_price} → {trail_pct}%\n"
             )
+            if should_save_signal(heure, minute):
+                save_pro_signal(
+                    ticker=b['ticker'],
+                    signal_type="ETF",
+                    price=b['price'],
+                    score=b['score'],
+                    gap=b['gap'],
+                    vol_ratio=b['vol_ratio'],
+                    trail_percent=trail_pct,
+                    aum_m=b.get('aum_m', None),
+                    market_bias=b.get('market_bias'),
+                    spread_pct=spread_pct
+                )
     else:
         message += f"❌ No Valid ETF Identified\n"
         message += f"⏰ Until next time!\n"
