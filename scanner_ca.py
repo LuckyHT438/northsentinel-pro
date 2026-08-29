@@ -44,7 +44,7 @@ CONFIG = {
 # ==================== PARAMÈTRES GLOBAUX ====================
 MONTREAL_TZ = pytz.timezone('America/Toronto')
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_ONLY_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
 
 CAPITAL = CONFIG['capital']
 RISK_PER_TRADE = CONFIG['risk_per_trade']
