@@ -47,8 +47,9 @@ MONTREAL_TZ = pytz.timezone('America/Toronto')
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
 
-# Détection du mode interactif (terminal) vs cron
-IS_INTERACTIVE = sys.stdin.isatty()
+# Détection du mode manuel (GitHub Actions OU terminal interactif)
+GITHUB_EVENT = os.environ.get("GITHUB_EVENT_NAME", "")
+IS_MANUAL_RUN = (GITHUB_EVENT == "workflow_dispatch") or sys.stdin.isatty()
 
 CAPITAL = CONFIG['capital']
 RISK_PER_TRADE = CONFIG['risk_per_trade']
@@ -621,7 +622,7 @@ def main():
     # Vérifier si le marché est fermé (week-end ou férié)
     if is_ca_market_closed(now):
         print("🏖️ Marché CA fermé – Arrêt.")
-        if IS_INTERACTIVE:
+        if IS_MANUAL_RUN:
             msg = (
                 "🤖 <b>NorthSentinel CA Only</b>™️\n"
                 "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
@@ -652,7 +653,7 @@ def main():
         print("🌙 Session APRÈS-MIDI détectée.")
     else:
         print("⏰ Lancement hors des plages horaires (9h-11h30 ou 13h-15h30) – Arrêt.")
-        if IS_INTERACTIVE:
+        if IS_MANUAL_RUN:
             msg = (
                 "🤖 <b>NorthSentinel CA Only</b>™️\n"
                 "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
