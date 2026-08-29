@@ -312,7 +312,7 @@ def run_news_scan():
         return
 
     # Construction du message en anglais
-    msg = "📰 <b>NorthSentinel CA Only</b> – Morning News Alert (9:25 AM ET)\n"
+    msg = "📰 <b>NorthSentinel CA Only</b>™️– Morning News Alert (9:25 AM ET)\n"
     msg += "═" * 35 + "\n\n"
 
     for a in alerts:
@@ -735,7 +735,7 @@ def main():
         print(f"🏖️ Marché CA fermé (week-end ou férié) – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
-                "🤖 <b>NorthSentinel CA Only</b>\n"
+                "🤖 <b>NorthSentinel CA Only</b>™️\n"
                 "Canadian intraday trading signals. Long & Short. Manual execution.\n"
                 f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -759,7 +759,7 @@ def main():
         # Envoi d'un message si le run est manuel
         if IS_MANUAL_RUN:
             msg = (
-                "🤖 <b>NorthSentinel CA Only</b>\n"
+                "🤖 <b>NorthSentinel CA Only</b>™️\n"
                 "Canadian intraday trading signals. Long & Short. Manual execution.\n"
                 f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -774,7 +774,7 @@ def main():
         return
 
     print("=" * 50)
-    print(f"🤖 NorthSentinel CA Only – {now.strftime('%Y-%m-%d %H:%M')} (Montreal)")
+    print(f"🤖 NorthSentinel CA Only™️– {now.strftime('%Y-%m-%d %H:%M')} (Montreal)")
     print(f"💰 Capital: ${CAPITAL:,.0f}")
     print(f"📰 News sources: Google RSS + CBC + Financial Post (3 sources)")
     print(f"📊 Modes: LONG + SHORT")
@@ -819,7 +819,7 @@ def main():
         return
 
     # Construction du message Telegram (en anglais)
-    msg = f"🤖 <b>NorthSentinel CA Only</b> – Scan {now.strftime('%H:%M')} (ET)\n"
+    msg = f"🤖 <b>NorthSentinel CA Only</b>™️– Scan {now.strftime('%H:%M')} (ET)\n"
     msg += f"💰 Capital: ${CAPITAL:,.0f} | Bias: ⚪ Neutral (CA)\n"
     msg += f"📊 Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
     msg += "═" * 35 + "\n"
