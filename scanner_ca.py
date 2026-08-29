@@ -740,11 +740,11 @@ def main():
                 "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
                 f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>⏰ Manual run triggered on a closed market day (weekend or holiday).</i>\n"
-                "<i>The scanner only runs on Canadian market days during active windows.</i>\n"
-                "<i>⏳ Scheduled active scan windows:</i>\n"
-                "   <i>• 9:25 AM – 11:30 AM ET</i>\n"
-                "   <i>• 1:00 PM – 3:30 PM ET</i>\n"
+                "⏰ Manual run triggered on a closed market day (weekend or holiday).\n"
+                "The scanner only runs on Canadian market days during active windows.\n"
+                "⏳ Scheduled active scan windows:\n"
+                "   • 9:25 AM – 11:30 AM ET\n"
+                "   • 1:00 PM – 3:30 PM ET\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "<i>Informational automated signal. Not financial or trading advice.</i>"
             )
@@ -764,10 +764,10 @@ def main():
                 "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
                 f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>⏰ Manual run triggered outside trading hours.</i>\n"
-                "<i>⏳ Scheduled active scan windows:</i>\n"
-                "   <i>• 9:25 AM – 11:30 AM ET</i>\n"
-                "   <i>• 1:00 PM – 3:30 PM ET</i>\n"
+                "⏰ Manual run triggered outside trading hours.\n"
+                "⏳ Scheduled active scan windows:\n"
+                "   • 9:25 AM – 11:30 AM ET\n"
+                "   • 1:00 PM – 3:30 PM ET\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "<i>Informational automated signal. Not financial or trading advice.</i>"
             )
@@ -820,10 +820,9 @@ def main():
         return
 
     # Construction du message Telegram (en anglais)
-    msg = f"🤖 <b>NorthSentinel CA Only</b>™️\n"
-    msg += f"<i>Scan {now.strftime('%H:%M')} (ET)</i>\n"
-    msg += f"<i>💰 Capital: ${CAPITAL:,.0f} | Bias: ⚪ Neutral (CA)</i>\n"
-    msg += f"<i>📊 Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs</i>\n"
+    msg = "🤖 <b>NorthSentinel CA Only</b>™️\n"
+    msg += f"<i>Scan {now.strftime('%H:%M')} (ET) | Bias: ⚪ Neutral (CA)</i>\n"
+    msg += f"<i>💰 Capital: ${CAPITAL:,.0f} | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs</i>\n"
     msg += "═" * 35 + "\n"
 
     if best_stock:
