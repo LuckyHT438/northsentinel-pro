@@ -18,11 +18,11 @@ from urllib3.util.retry import Retry
 CONFIG = {
     "market": "CA",
     "capital": 1_000_000,
-    "risk_per_trade": 0.02,
-    "max_capital_per_position": 0.10,
+    "risk_per_trade": 0.02,           # 2% du capital par trade
+    "max_capital_per_position": 0.10, # 10% maximum du capital alloué à une position
     "max_spread_pct": 5.0,
-    "score_min_stocks": 5,      # sur 7
-    "score_min_etfs": 4,        # sur 5
+    "score_min_stocks": 5,            # sur 7
+    "score_min_etfs": 4,              # sur 5
     "price_min_stocks": 2.00,
     "price_max_stocks": 300.00,
     "price_max_etfs": 9999.00,
@@ -170,6 +170,7 @@ def _build_ca_holidays(year):
     return ca
 
 def is_ca_market_closed(check_date):
+    """Vérifie si le marché canadien est fermé (week-end ou jour férié)."""
     if isinstance(check_date, datetime):
         check_date = check_date.date()
     # Vérification du week-end (samedi ou dimanche)
@@ -635,7 +636,11 @@ def analyze_etf(ticker):
 
 # ==================== CALCUL DES QUANTITÉS ====================
 def calculate_quantity(entry, stop, capital, risk_pct, max_cap_pct):
-    """Calcule le nombre d'unités à acheter/vendre selon le risque."""
+    """
+    Calcule le nombre d'unités à acheter/vendre selon le risque.
+    - risk_pct : pourcentage du capital risqué par trade (ex: 0.02 = 2%)
+    - max_cap_pct : pourcentage maximum du capital alloué à une position (ex: 0.10 = 10%)
+    """
     risk_amount = capital * risk_pct
     max_exposure = capital * max_cap_pct
     stop_dist = abs(entry - stop)
@@ -654,7 +659,7 @@ def get_verdict(confidence):
     if confidence >= 8.5:
         return "Strong", "🟢"
     elif confidence >= 7.5:
-        return "Favorable", "🔵"   # Bleu pour Favorable (modification demandée)
+        return "Favorable", "🔵"   # Bleu pour Favorable
     elif confidence >= 5.5:
         return "Mixed", "🟡"
     elif confidence >= 3.5:
@@ -773,6 +778,7 @@ def main():
     print(f"💰 Capital: ${CAPITAL:,.0f}")
     print(f"📰 News sources: Google RSS + CBC + Financial Post (3 sources)")
     print(f"📊 Modes: LONG + SHORT")
+    print(f"⚙️ Risk per trade: {RISK_PER_TRADE*100:.1f}% | Max position: {MAX_CAPITAL_PER_POSITION*100:.1f}%")
     print("=" * 50)
 
     # === MODE NEWS (9h25 uniquement) ===
