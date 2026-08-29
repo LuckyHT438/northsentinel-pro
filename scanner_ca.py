@@ -172,6 +172,9 @@ def _build_ca_holidays(year):
 def is_ca_market_closed(check_date):
     if isinstance(check_date, datetime):
         check_date = check_date.date()
+    # Vérification du week-end (samedi ou dimanche)
+    if check_date.weekday() >= 5:
+        return True
     holidays = _build_ca_holidays(check_date.year)
     adjusted = {_adjust_weekend(d) for d in holidays}
     return check_date in adjusted
@@ -308,7 +311,7 @@ def run_news_scan():
         return
 
     # Construction du message en anglais
-    msg = "📰 <b>NorthSentinel CA Only</b>™️– Morning News Alert (9:25 AM ET)\n"
+    msg = "📰 <b>NorthSentinel CA Only</b> – Morning News Alert (9:25 AM ET)\n"
     msg += "═" * 35 + "\n\n"
 
     for a in alerts:
@@ -722,9 +725,24 @@ def main():
     heure = now.hour
     minute = now.minute
 
-    # Vérification jour férié
+    # Vérification jour férié OU week-end
     if is_ca_market_closed(now):
-        print(f"🏖️ Marché CA fermé (ferié) – Arrêt.")
+        print(f"🏖️ Marché CA fermé (week-end ou férié) – Arrêt.")
+        if IS_MANUAL_RUN:
+            msg = (
+                "🤖 <b>NorthSentinel CA Only</b>\n"
+                "Canadian intraday trading signals. Long & Short. Manual execution.\n"
+                f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⏰ Manual run triggered on a closed market day (weekend or holiday).\n"
+                "The scanner only runs on Canadian market days during active windows.\n"
+                "⏳ Scheduled active scan windows:\n"
+                "   • 9:25 AM – 11:30 AM ET\n"
+                "   • 1:00 PM – 3:30 PM ET\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Informational automated signal. Not financial or trading advice.</i>"
+            )
+            send_telegram(msg)
         return
 
     # Fenêtres horaires : 9h25-11h30 et 13h00-15h30
@@ -736,7 +754,7 @@ def main():
         # Envoi d'un message si le run est manuel
         if IS_MANUAL_RUN:
             msg = (
-                "🤖 <b>NorthSentinel CA Only</b>™️\n"
+                "🤖 <b>NorthSentinel CA Only</b>\n"
                 "Canadian intraday trading signals. Long & Short. Manual execution.\n"
                 f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -795,7 +813,7 @@ def main():
         return
 
     # Construction du message Telegram (en anglais)
-    msg = f"🤖 <b>NorthSentinel CA Only</b>™️– Scan {now.strftime('%H:%M')} (ET)\n"
+    msg = f"🤖 <b>NorthSentinel CA Only</b> – Scan {now.strftime('%H:%M')} (ET)\n"
     msg += f"💰 Capital: ${CAPITAL:,.0f} | Bias: ⚪ Neutral (CA)\n"
     msg += f"📊 Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
     msg += "═" * 35 + "\n"
