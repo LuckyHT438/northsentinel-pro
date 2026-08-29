@@ -1,5 +1,5 @@
 # ============================================================
-# NORTHSENTINEL CA ONLY — SCANNER INTRADAY 9h25-11h30 & 13h00-15h30
+# NORTHSENTINEL CA ONLY — SCANNER INTRADAY CONTINU (BOUCLE)
 # SHORTS + LONGS — 3 SOURCES DE NEWS
 # ============================================================
 import requests
@@ -46,10 +46,6 @@ MONTREAL_TZ = pytz.timezone('America/Toronto')
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
 
-# Détection du mode de déclenchement du workflow
-GITHUB_EVENT = os.environ.get("GITHUB_EVENT_NAME", "")
-IS_MANUAL_RUN = (GITHUB_EVENT == "workflow_dispatch")
-
 CAPITAL = CONFIG['capital']
 RISK_PER_TRADE = CONFIG['risk_per_trade']
 MAX_CAPITAL_PER_POSITION = CONFIG['max_capital_per_position']
@@ -63,10 +59,9 @@ STOCK_TICKERS = CONFIG['tickers']['stocks']
 ETF_TICKERS = CONFIG['tickers']['etfs']
 
 # ==================== SOURCES RSS NEWS ====================
-# 3 sources : Google News + CBC Business + Financial Post
 RSS_FEEDS = [
-    "https://www.cbc.ca/webfeed/rss/rss-business",          # CBC News Business
-    "https://business.financialpost.com/feed/"              # Financial Post
+    "https://www.cbc.ca/webfeed/rss/rss-business",
+    "https://business.financialpost.com/feed/"
 ]
 
 # ==================== SESSION HTTP ====================
@@ -118,13 +113,11 @@ def _build_ca_holidays(year):
     ca.add(date(year, 7, 1))
     ca.add(date(year, 12, 25))
     ca.add(date(year, 12, 26))
-
     # Family Day
     fam = date(year, 2, 1)
     while fam.weekday() != 0:
         fam = date(year, 2, fam.day + 1)
     ca.add(date(year, 2, fam.day + 14))
-
     # Good Friday
     a = year % 19
     b = year // 100
@@ -142,38 +135,32 @@ def _build_ca_holidays(year):
     day = ((h + l - 7 * m + 114) % 31) + 1
     easter = date(year, month, day)
     ca.add(easter - timedelta(days=2))
-
     # Victoria Day
     vic = date(year, 5, 24)
     while vic.weekday() != 0:
         vic = date(year, 5, vic.day - 1)
     ca.add(vic)
-
     # Civic Holiday
     civ = date(year, 8, 1)
     while civ.weekday() != 0:
         civ = date(year, 8, civ.day + 1)
     ca.add(civ)
-
     # Labour Day
     lab = date(year, 9, 1)
     while lab.weekday() != 0:
         lab = date(year, 9, lab.day + 1)
     ca.add(lab)
-
     # Canadian Thanksgiving
     thanks = date(year, 10, 1)
     while thanks.weekday() != 0:
         thanks = date(year, 10, thanks.day + 1)
     ca.add(date(year, 10, thanks.day + 7))
-
     return ca
 
 def is_ca_market_closed(check_date):
     """Vérifie si le marché canadien est fermé (week-end ou jour férié)."""
     if isinstance(check_date, datetime):
         check_date = check_date.date()
-    # Vérification du week-end (samedi ou dimanche)
     if check_date.weekday() >= 5:
         return True
     holidays = _build_ca_holidays(check_date.year)
@@ -182,14 +169,9 @@ def is_ca_market_closed(check_date):
 
 # ==================== NEWS SCANNER (3 SOURCES) ====================
 def get_news_for_ticker(ticker):
-    """
-    Récupère les news des 3 sources (Google News, CBC, Financial Post)
-    pour un ticker donné. Retourne une liste de titres (max 5) des 6 dernières heures.
-    """
     all_news = []
     ticker_clean = ticker.replace('.TO', '').upper()
-
-    # 1. Google News RSS
+    # 1. Google News
     try:
         params = {"q": f"{ticker}+stock", "hl": "en-CA", "gl": "CA"}
         r = requests.get("https://news.google.com/rss/search", params=params, timeout=5)
@@ -206,8 +188,7 @@ def get_news_for_ticker(ticker):
                 pass
     except:
         pass
-
-    # 2. CBC Business + Financial Post (flux RSS généraux filtrés par ticker)
+    # 2. CBC + Financial Post
     for feed_url in RSS_FEEDS:
         try:
             r = requests.get(feed_url, timeout=5)
@@ -215,7 +196,6 @@ def get_news_for_ticker(ticker):
             for item in soup.find_all('item')[:15]:
                 title = item.find('title').text if item.find('title') else ''
                 description = item.find('description').text if item.find('description') else ''
-                # Vérifie si le ticker ou le nom de l'entreprise apparaît
                 if ticker_clean in title.upper() or ticker_clean in description.upper():
                     pub_date_str = item.find('pubDate').text if item.find('pubDate') else ''
                     try:
@@ -227,26 +207,17 @@ def get_news_for_ticker(ticker):
                         pass
         except:
             pass
-
-    # Déduplication par titre
     seen = set()
     unique_news = []
     for n in all_news:
         if n['title'] not in seen:
             seen.add(n['title'])
             unique_news.append(n)
-
-    # Tri par date (les plus récents d'abord)
     unique_news.sort(key=lambda x: x['hours_ago'])
     return unique_news[:5]
 
 def analyze_sentiment(title):
-    """
-    Analyse le sentiment d'un titre de news.
-    Retourne un score : +2 (bullish fort), +1 (bullish), -1 (bearish), -2 (bearish fort), 0 (neutre).
-    """
     text = title.lower()
-
     bullish_strong = [
         'fda approval', 'partnership', 'deal', 'acquisition', 'buyout', 'merger',
         'earnings beat', 'upgraded', 'breakthrough', 'contract awarded',
@@ -274,7 +245,6 @@ def analyze_sentiment(title):
         'delay', 'delayed', 'suspended', 'halted', 'reduced', 'lowered',
         'restructuring', 'layoff', 'impairment', 'write-down', 'debt'
     ]
-
     score = 0
     if any(w in text for w in bullish_strong):
         score += 2
@@ -287,11 +257,9 @@ def analyze_sentiment(title):
     return score
 
 def run_news_scan():
-    """Exécute le scan de news à 9h25 et envoie un récapitulatif Telegram."""
     print("📰 Scan News 9h25 (3 sources: Google, CBC, Financial Post)...")
     alerts = []
     all_tickers = STOCK_TICKERS + ETF_TICKERS
-
     for ticker in all_tickers:
         news = get_news_for_ticker(ticker)
         if not news:
@@ -306,28 +274,22 @@ def run_news_scan():
                     'hours_ago': round(n['hours_ago'], 1)
                 })
                 break
-
     if not alerts:
         print("ℹ️ Aucune news significative trouvée.")
         return
-
-    # Construction du message en anglais
     msg = "📰 <b>NorthSentinel CA Only</b>™️\n"
     msg += "<i>Morning News Alert (9:25 AM ET)</i>\n"
     msg += "═" * 35 + "\n\n"
-
     for a in alerts:
         emoji = "📈 BULLISH" if a['sentiment'] > 0 else "📉 BEARISH" if a['sentiment'] < 0 else "➡️ NEUTRAL"
         msg += f"🔹 <b>{a['ticker']}</b>\n"
         msg += f"   {a['title']}\n"
         msg += f"   {emoji} | {a['hours_ago']}h ago\n\n"
-
     msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
     send_telegram(msg)
 
 # ==================== FONCTIONS D'ANALYSE (STOCKS & ETF) ====================
 def get_market_cap_category(ticker):
-    """Retourne la catégorie de capitalisation boursière."""
     try:
         info = yf.Ticker(ticker).info
         mc = info.get('marketCap', 0)
@@ -347,13 +309,11 @@ def get_market_cap_category(ticker):
         return "N/A"
 
 def get_exchange(info):
-    """Retourne l'échange à partir des infos Yahoo Finance."""
     ex = info.get('exchange', '')
     map_ex = {'TOR': 'TMX', 'TSX': 'TMX', 'TSXV': 'TSXV', 'CNQ': 'CSE'}
     return map_ex.get(ex, ex if ex else 'TMX')
 
 def calculate_rsi(prices, period=14):
-    """Calcule le RSI sur une série de prix."""
     delta = prices.diff()
     gain = delta.where(delta > 0, 0).rolling(period).mean()
     loss = -delta.where(delta < 0, 0).rolling(period).mean()
@@ -362,7 +322,6 @@ def calculate_rsi(prices, period=14):
     return rsi.iloc[-1] if len(rsi) > 0 else None
 
 def get_confidence_score(score, vol_ratio, gap, cap_category):
-    """Calcule un score de confiance (sur 10) pour qualifier la qualité du setup."""
     conf = 5.0
     conf += min(score * 0.4, 2.0)
     conf += min(vol_ratio * 0.3, 1.5)
@@ -374,19 +333,13 @@ def get_confidence_score(score, vol_ratio, gap, cap_category):
 
 # ==================== ANALYSE STOCKS (LONG + SHORT) ====================
 def analyze_stock(ticker):
-    """
-    Analyse un titre pour détecter un setup LONG ou SHORT.
-    Retourne un dictionnaire avec direction, score, TP/SL, etc. ou None si invalide.
-    """
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         time.sleep(random.uniform(0.2, 0.4))
-
         price = info.get('regularMarketPrice') or info.get('currentPrice')
         if not price or price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             return None
-
         bid = info.get('bid')
         ask = info.get('ask')
         spread_pct = 0.0
@@ -396,63 +349,46 @@ def analyze_stock(ticker):
             if spread_pct > MAX_SPREAD_PCT:
                 return None
             if spread_pct > 0.3:
-                price = ask  # On utilise le ask pour l'entry (achat)
-
+                price = ask
         prev_close = info.get('previousClose')
         if not prev_close or prev_close == 0:
             return None
         gap = ((price - prev_close) / prev_close) * 100
-
-        # ===== SCORING (7 critères) =====
         score = 0
-
-        # 1. Gap (accepte positif pour LONG, négatif pour SHORT)
-        if 5 <= gap <= 40:   # LONG
+        if 5 <= gap <= 40:
             direction = "LONG"
             score += 1
-        elif -40 <= gap <= -5:  # SHORT
+        elif -40 <= gap <= -5:
             direction = "SHORT"
             score += 1
         else:
-            return None  # Gap insuffisant des deux côtés
-
-        # 2. Volume relatif
+            return None
         volume = info.get('volume', 0)
         avg_vol = info.get('averageVolume', volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
         if vol_ratio > 1.5:
             score += 1
-
-        # 3. Float
         float_shares = info.get('floatShares')
         if float_shares is not None and float_shares < 50_000_000:
             score += 1
         elif float_shares is None:
             score += 1
-
-        # 4. Bêta
         beta = info.get('beta')
         if beta is not None and beta > 1.0:
             score += 1
         elif beta is None:
             score += 1
-
-        # 5. Short Ratio
         short_ratio = info.get('shortRatio')
         if short_ratio is not None and short_ratio > 2:
             score += 1
         elif short_ratio is None:
             score += 1
-
-        # 6. SMA50 (direction dépend du sens)
         sma50 = info.get('fiftyDayAverage')
         if sma50:
             if direction == "LONG" and price > sma50:
                 score += 1
             elif direction == "SHORT" and price < sma50:
                 score += 1
-
-        # 7. News sentiment (bonus selon la direction)
         news = get_news_for_ticker(ticker)
         if news:
             for n in news[:3]:
@@ -469,36 +405,27 @@ def analyze_stock(ticker):
                 elif direction == "SHORT" and sent >= 2:
                     score -= 1
                     break
-
-        # ===== VALIDATION DU SCORE =====
         if score < SCORE_MIN_STOCKS:
             return None
-
-        # ===== CALCUL DES TP/SL/TRAILING =====
         cap_category = get_market_cap_category(ticker)
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, cap_category)
-
-        # TP / SL / TRAIL (symétriques LONG/SHORT)
         if abs(gap) >= 20:
             tp_pct = 1.02 + (score - 4) * 0.006
         elif abs(gap) >= 10:
             tp_pct = 1.015 + (score - 4) * 0.004
         else:
             tp_pct = 1.005 + (score - 4) * 0.002
-
         if score >= 6:
             sl_pct = 0.96
         else:
             sl_pct = 0.95
-
         if score >= 8:
             trail = 2.5
         elif score >= 6:
             trail = 3.0
         else:
             trail = 4.0
-
         return {
             'ticker': ticker,
             'exchange': exchange,
@@ -514,29 +441,21 @@ def analyze_stock(ticker):
             'sl_mult': round(sl_pct, 3),
             'trail_pct': round(trail, 2)
         }
-
     except Exception:
         return None
 
 # ==================== ANALYSE ETF (LONG + SHORT) ====================
 def analyze_etf(ticker):
-    """
-    Analyse un ETF pour détecter un setup LONG ou SHORT.
-    Similaire à analyze_stock mais avec des critères adaptés aux ETF.
-    """
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         hist = stock.history(period="1mo")
         time.sleep(random.uniform(0.2, 0.4))
-
         if hist.empty or len(hist) < 2:
             return None
-
         closes = hist['Close']
         volumes = hist['Volume']
         price = closes.iloc[-1]
-
         bid = info.get('bid')
         ask = info.get('ask')
         spread_pct = 0.0
@@ -547,22 +466,15 @@ def analyze_etf(ticker):
                 return None
             if spread_pct > 0.3:
                 price = ask
-
         prev_close = closes.iloc[-2] if len(closes) > 1 else None
         if not prev_close:
             return None
         gap = ((price - prev_close) / prev_close) * 100
-
         volume = info.get('volume', 0)
         avg_vol = volumes.mean() if len(volumes) > 0 else volume
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
-
         aum = info.get('totalAssets', 0) or info.get('assetsUnderManagement', 0)
-
-        # ===== SCORING (5 critères) =====
         score = 0
-
-        # 1. Gap (positif ou négatif)
         if 0.5 <= gap <= 8:
             direction = "LONG"
             score += 1
@@ -571,51 +483,34 @@ def analyze_etf(ticker):
             score += 1
         else:
             return None
-
-        # 2. Volume ratio
         if vol_ratio > 0.9:
             score += 1
-
-        # 3. AUM
         if aum > 50_000_000 or aum == 0:
             score += 1
-
-        # 4. RSI (entre 35 et 80, quelle que soit la direction)
         rsi = None
         if len(closes) > 14:
             rsi = calculate_rsi(closes)
             if rsi and 35 <= rsi <= 80:
                 score += 1
-
-        # 5. SMA20 (direction dépend du sens)
         if len(closes) >= 20:
             sma20 = closes.rolling(20).mean().iloc[-1]
             if sma20:
                 if direction == "LONG" and price > 0.7 * sma20:
                     score += 1
                 elif direction == "SHORT" and price < 1.3 * sma20:
-                    # Pour le short, on accepte si le prix n'est pas trop au-dessus de la SMA20
-                    # Critère simplifié : on vérifie que le prix n'est pas en nette tendance haussière
                     score += 1
-
-        # ===== VALIDATION =====
         if score < SCORE_MIN_ETFS:
             return None
-
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
-
-        # TP/SL/Trail pour ETF
         if abs(gap) >= 6:
             tp_pct = 1.015 + (score - 3) * 0.005
         elif abs(gap) >= 3:
             tp_pct = 1.01 + (score - 3) * 0.005
         else:
             tp_pct = 1.005 + (score - 3) * 0.005
-
         sl_pct = 0.96
         trail_pct = 3.0
-
         return {
             'ticker': ticker,
             'exchange': exchange,
@@ -631,17 +526,11 @@ def analyze_etf(ticker):
             'sl_mult': round(sl_pct, 3),
             'trail_pct': round(trail_pct, 2)
         }
-
     except Exception:
         return None
 
 # ==================== CALCUL DES QUANTITÉS ====================
 def calculate_quantity(entry, stop, capital, risk_pct, max_cap_pct):
-    """
-    Calcule le nombre d'unités à acheter/vendre selon le risque.
-    - risk_pct : pourcentage du capital risqué par trade (ex: 0.02 = 2%)
-    - max_cap_pct : pourcentage maximum du capital alloué à une position (ex: 0.10 = 10%)
-    """
     risk_amount = capital * risk_pct
     max_exposure = capital * max_cap_pct
     stop_dist = abs(entry - stop)
@@ -656,11 +545,10 @@ def format_price(p):
     return f"{p:.2f}"
 
 def get_verdict(confidence):
-    """Retourne le libellé et l'émoji du verdict selon la confiance."""
     if confidence >= 8.5:
         return "Strong", "🟢"
     elif confidence >= 7.5:
-        return "Favorable", "🔵"   # Bleu pour Favorable
+        return "Favorable", "🔵"
     elif confidence >= 5.5:
         return "Mixed", "🟡"
     elif confidence >= 3.5:
@@ -669,179 +557,199 @@ def get_verdict(confidence):
         return "Poor", "🔴"
 
 def build_setup_message(data, is_etf=False):
-    """
-    Construit le message Telegram pour un setup (LONG ou SHORT).
-    Retourne une chaîne formatée en HTML pour Telegram.
-    """
     max_score = 7 if not is_etf else 5
     entry = data['price']
     direction = data['direction']
-
-    # TP et SL selon la direction
     if direction == "LONG":
         tp = round(entry * data['tp_mult'], 2)
         sl = round(entry * data['sl_mult'], 2)
         trail_price = round(entry * (1 - data['trail_pct'] / 100), 2)
         tp_label = "TAKE-PROFIT"
         sl_label = "STOP LOSS"
-    else:  # SHORT
-        tp = round(entry * (2 - data['tp_mult']), 2)  # TP en dessous du prix
-        sl = round(entry * (2 - data['sl_mult']), 2)  # SL au-dessus du prix
+    else:
+        tp = round(entry * (2 - data['tp_mult']), 2)
+        sl = round(entry * (2 - data['sl_mult']), 2)
         trail_price = round(entry * (1 + data['trail_pct'] / 100), 2)
         tp_label = "TAKE-PROFIT"
         sl_label = "STOP LOSS"
-
     qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
-
-    # Spread
     spread_display = ""
     if data['spread_pct'] > 0:
         spread_usd = round((data['spread_pct'] / 100) * entry, 2)
         spread_display = f" | Spread: {data['spread_pct']:.2f}% (${spread_usd:.2f})"
-
-    # Verdict
     verdict_text, verdict_emoji = get_verdict(data['confidence'])
-
-    # Construction du message
     direction_emoji = "📈 LONG" if direction == "LONG" else "📉 SHORT"
     gap_display = f"+{data['gap']:.2f}%" if data['gap'] >= 0 else f"{data['gap']:.2f}%"
-
     msg = f"🔹 <b>{data['ticker']}</b> ({data['exchange']}){spread_display}\n"
     msg += f"   Direction: <b>{direction_emoji}</b>\n"
     msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
     msg += f"   GAP: {gap_display} | VOL: x{data['vol_ratio']:.2f}\n"
-
     if not is_etf and 'cap_category' in data:
         msg += f"   Cap: {data['cap_category']}\n"
     if is_etf:
         msg += f"   AUM: {data['aum_m']}M$\n"
-
     msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text}\n"
     msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
     msg += f"   📦 QTY: {qty} {'shares' if not is_etf else 'units'}\n"
     msg += f"   📈 {tp_label}: ${format_price(tp)} ({'+' if direction == 'LONG' else ''}{round((tp/entry - 1) * 100 if direction == 'LONG' else (1 - tp/entry) * 100, 1)}%)\n"
     msg += f"   🛑 {sl_label}: ${format_price(sl)} ({'-' if direction == 'LONG' else '+'}{round((1 - sl/entry) * 100 if direction == 'LONG' else (sl/entry - 1) * 100, 1)}%)\n"
     msg += f"   🔄 TRAILING: ${format_price(trail_price)} → {data['trail_pct']}%\n"
-
     return msg
 
-# ==================== MAIN ====================
+# ==================== FONCTION D'ATTENTE ====================
+def wait_until_next_scan(target_minute):
+    """Attend jusqu'à la prochaine minute cible (multiple de 5, ou 9:25 spécifique)."""
+    now = datetime.now(MONTREAL_TZ)
+    # Calculer la prochaine occurrence de l'heure/minute cible
+    # On suppose que target_minute est un tuple (heure, minute)
+    target_hour, target_min = target_minute
+    target_time = now.replace(hour=target_hour, minute=target_min, second=0, microsecond=0)
+    if target_time <= now:
+        # Si l'heure cible est déjà passée, ajouter 5 minutes pour la prochaine occurrence
+        # Mais pour 9h25 on ne veut qu'une occurrence par jour
+        # On va gérer différemment dans la boucle
+        pass
+    # Pour simplifier, on calcule le temps restant jusqu'à la prochaine minute cible
+    # On va arrondir à la minute supérieure
+    # On va créer une fonction qui prend une minute et attend jusqu'à cette minute précise
+    # On utilise datetime pour calculer la différence
+    now = datetime.now(MONTREAL_TZ)
+    target_dt = now.replace(minute=target_min, second=0, microsecond=0)
+    # Si la minute cible est inférieure à la minute actuelle, on ajoute une heure
+    if target_dt <= now:
+        # Pour les minutes multiples de 5, on ajoute 5 minutes
+        # Mais on peut aussi utiliser la prochaine occurrence
+        # On va plutôt utiliser un calcul de différence
+        # On peut utiliser le modulo pour trouver la prochaine minute multiple de 5
+        pass
+
+def wait_until_target(target_hour, target_minute):
+    """Attend jusqu'à l'heure:minute cible."""
+    now = datetime.now(MONTREAL_TZ)
+    target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+    if target <= now:
+        # Si déjà passé, on ajoute 5 minutes pour la prochaine occurrence
+        target += timedelta(minutes=5)
+    diff = (target - now).total_seconds()
+    if diff > 0:
+        print(f"⏳ Attente jusqu'à {target.strftime('%H:%M')}... ({diff/60:.1f} min)")
+        time.sleep(diff)
+
+# ==================== MAIN CONTINU ====================
 def main():
     now = datetime.now(MONTREAL_TZ)
     heure = now.hour
     minute = now.minute
 
-    # Vérification jour férié OU week-end
+    # Vérifier si le marché est fermé (week-end ou férié)
     if is_ca_market_closed(now):
-        print(f"🏖️ Marché CA fermé (week-end ou férié) – Arrêt.")
-        if IS_MANUAL_RUN:
-            msg = (
-                "🤖 <b>NorthSentinel CA Only</b>™️\n"
-                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
-                f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "⏰ Manual run triggered on a closed market day (weekend or holiday).\n"
-                "The scanner only runs on Canadian market days during active windows.\n"
-                "⏳ Scheduled active scan windows:\n"
-                "   • 9:25 AM – 11:30 AM ET\n"
-                "   • 1:00 PM – 3:30 PM ET\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Informational automated signal. Not financial or trading advice.</i>"
-            )
-            send_telegram(msg)
+        print("🏖️ Marché CA fermé – Arrêt.")
         return
 
-    # Fenêtres horaires : 9h25-11h30 et 13h00-15h30
-    morning = (heure == 9 and minute >= 25) or (heure == 10) or (heure == 11 and minute <= 30)
-    afternoon = (heure == 13) or (heure == 14) or (heure == 15 and minute <= 30)
-
-    if not (morning or afternoon):
-        print(f"⏰ Hors fenêtre (9:25-11:30 ou 13:00-15:30 ET) – Arrêt.")
-        # Envoi d'un message si le run est manuel
-        if IS_MANUAL_RUN:
-            msg = (
-                "🤖 <b>NorthSentinel CA Only</b>™️\n"
-                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
-                f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "⏰ Manual run triggered outside trading hours.\n"
-                "⏳ Scheduled active scan windows:\n"
-                "   • 9:25 AM – 11:30 AM ET\n"
-                "   • 1:00 PM – 3:30 PM ET\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Informational automated signal. Not financial or trading advice.</i>"
-            )
-            send_telegram(msg)
-        return
-
-    print("=" * 50)
-    print(f"🤖 NorthSentinel CA Only™️– {now.strftime('%Y-%m-%d %H:%M')} (Montreal)")
-    print(f"💰 Capital: ${CAPITAL:,.0f}")
-    print(f"📰 News sources: Google RSS + CBC + Financial Post (3 sources)")
-    print(f"📊 Modes: LONG + SHORT")
-    print(f"⚙️ Risk per trade: {RISK_PER_TRADE*100:.1f}% | Max position: {MAX_CAPITAL_PER_POSITION*100:.1f}%")
-    print("=" * 50)
-
-    # === MODE NEWS (9h25 uniquement) ===
-    if heure == 9 and minute == 25:
-        run_news_scan()
-        return
-
-    # === MODE SCAN PRIX ===
-    print("\n🔍 Scanning STOCKS...")
-    stocks_results = []
-    for ticker in STOCK_TICKERS:
-        print(f"  - {ticker}...", end=" ")
-        data = analyze_stock(ticker)
-        if data:
-            stocks_results.append(data)
-            print(f"✅ Score {data['score']}/7 | {data['direction']}")
-        else:
-            print("❌")
-
-    print("\n🔍 Scanning ETFs...")
-    etfs_results = []
-    for ticker in ETF_TICKERS:
-        print(f"  - {ticker}...", end=" ")
-        data = analyze_etf(ticker)
-        if data:
-            etfs_results.append(data)
-            print(f"✅ Score {data['score']}/5 | {data['direction']}")
-        else:
-            print("❌")
-
-    # Sélection du meilleur setup (par score puis volume)
-    best_stock = max(stocks_results, key=lambda x: (x['score'], x['vol_ratio'])) if stocks_results else None
-    best_etf = max(etfs_results, key=lambda x: (x['score'], x['vol_ratio'])) if etfs_results else None
-
-    # Pas de message si aucun setup
-    if not best_stock and not best_etf:
-        print("\nℹ️ Aucun setup valide – Pas de message Telegram.")
-        return
-
-    # Construction du message Telegram (en anglais)
-    msg = "🤖 <b>NorthSentinel CA Only</b>™️\n"
-    msg += f"<i>Scan {now.strftime('%H:%M')} (ET) | Bias: ⚪ Neutral (CA)</i>\n"
-    msg += f"<i>💰 Capital: ${CAPITAL:,.0f} | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs</i>\n"
-    msg += "═" * 35 + "\n"
-
-    if best_stock:
-        msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
-        msg += build_setup_message(best_stock, is_etf=False)
+    # Déterminer la session en fonction de l'heure de lancement
+    # Matin : 9h00-11h30, Après-midi : 13h00-15h30
+    if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
+        session = "morning"
+        start_hour, start_min = 9, 25
+        end_hour, end_min = 11, 30
+        print("☀️ Session MATIN détectée.")
+    elif 13 <= heure <= 15 and (heure < 15 or minute <= 30):
+        session = "afternoon"
+        start_hour, start_min = 13, 0
+        end_hour, end_min = 15, 30
+        print("🌙 Session APRÈS-MIDI détectée.")
     else:
-        msg += "\n🚀 <b>BEST STOCK SETUP</b>\n❌ No valid stock setup for this scan.\n"
+        print("⏰ Lancement hors des plages horaires (9h-11h30 ou 13h-15h30) – Arrêt.")
+        return
 
-    if best_etf:
-        msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
-        msg += build_setup_message(best_etf, is_etf=True)
-    else:
-        msg += "\n🚀 <b>BEST ETF SETUP</b>\n❌ No valid ETF setup for this scan.\n"
+    # Attendre le début de la session si nécessaire
+    now = datetime.now(MONTREAL_TZ)
+    if now.hour < start_hour or (now.hour == start_hour and now.minute < start_min):
+        print(f"⏳ Attente du début de session à {start_hour:02d}:{start_min:02d}...")
+        wait_until_target(start_hour, start_min)
+        now = datetime.now(MONTREAL_TZ)
 
-    msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
+    # Boucle principale
+    first_scan_done = False
+    while True:
+        now = datetime.now(MONTREAL_TZ)
+        # Vérifier si on a dépassé l'heure de fin
+        if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
+            print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
+            break
 
-    send_telegram(msg)
-    print("\n✅ Scan terminé.")
+        # Déterminer la prochaine action
+        current_hour, current_min = now.hour, now.minute
+
+        # Si c'est la première itération et qu'on est avant 9h25 (matin) ou avant 13h (après-midi) on attend le début
+        # Déjà géré par l'attente initiale
+
+        # Si on est exactement à 9h25 (session matin) et que ce n'est pas encore fait, faire scan news
+        if session == "morning" and current_hour == 9 and current_min == 25 and not first_scan_done:
+            run_news_scan()
+            first_scan_done = True
+            # Après le scan news, on attend 5 minutes pour le prochain scan (9h30)
+            wait_until_target(9, 30)
+            continue
+
+        # Sinon, on scanne les prix toutes les 5 minutes
+        # On vérifie si la minute actuelle est un multiple de 5 (ou 9h25 déjà traité)
+        if current_min % 5 == 0:
+            # Mais on ne veut pas scanner à 9h25 (déjà fait) ni à 11h30? si on est à 11h30, on scanne puis on sort après
+            # On va scanner à toutes les minutes multiples de 5, sauf 9h25 si déjà fait
+            if not (session == "morning" and current_hour == 9 and current_min == 25 and first_scan_done):
+                print(f"\n📊 Scan de prix à {now.strftime('%H:%M')} (session {session})")
+                # Exécuter les scans
+                stocks_results = []
+                for ticker in STOCK_TICKERS:
+                    print(f"  - {ticker}...", end=" ")
+                    data = analyze_stock(ticker)
+                    if data:
+                        stocks_results.append(data)
+                        print(f"✅ Score {data['score']}/7 | {data['direction']}")
+                    else:
+                        print("❌")
+                etfs_results = []
+                for ticker in ETF_TICKERS:
+                    print(f"  - {ticker}...", end=" ")
+                    data = analyze_etf(ticker)
+                    if data:
+                        etfs_results.append(data)
+                        print(f"✅ Score {data['score']}/5 | {data['direction']}")
+                    else:
+                        print("❌")
+                best_stock = max(stocks_results, key=lambda x: (x['score'], x['vol_ratio'])) if stocks_results else None
+                best_etf = max(etfs_results, key=lambda x: (x['score'], x['vol_ratio'])) if etfs_results else None
+                if best_stock or best_etf:
+                    msg = "🤖 <b>NorthSentinel CA Only</b>™️\n"
+                    msg += f"<i>Scan {now.strftime('%H:%M')} (ET) | Bias: ⚪ Neutral (CA)</i>\n"
+                    msg += f"<i>💰 Capital: ${CAPITAL:,.0f} | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs</i>\n"
+                    msg += "═" * 35 + "\n"
+                    if best_stock:
+                        msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
+                        msg += build_setup_message(best_stock, is_etf=False)
+                    else:
+                        msg += "\n🚀 <b>BEST STOCK SETUP</b>\n❌ No valid stock setup for this scan.\n"
+                    if best_etf:
+                        msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
+                        msg += build_setup_message(best_etf, is_etf=True)
+                    else:
+                        msg += "\n🚀 <b>BEST ETF SETUP</b>\n❌ No valid ETF setup for this scan.\n"
+                    msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
+                    send_telegram(msg)
+                else:
+                    print("ℹ️ Aucun setup valide – Pas de message Telegram.")
+        # Attendre la prochaine minute multiple de 5
+        # Calculer la prochaine minute multiple de 5
+        next_min = ((current_min // 5) + 1) * 5
+        next_hour = current_hour
+        if next_min == 60:
+            next_min = 0
+            next_hour += 1
+        # Si on est à 9h25 et qu'on a déjà fait le scan news, on doit attendre 9h30, mais on a déjà géré
+        # Sinon, on attend la prochaine minute cible
+        wait_until_target(next_hour, next_min)
 
 if __name__ == "__main__":
     main()
