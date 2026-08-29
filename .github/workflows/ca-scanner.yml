@@ -27,5 +27,5 @@ jobs:
       - name: Run CA Scanner
         env:
           TELEGRAM_CA_TOKEN: ${{ secrets.TELEGRAM_CA_ONLY_TOKEN }}
-          TELEGRAM_CA_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_CA_ID }}
+          TELEGRAM_CA_CHAT_ID: ${{ secrets.TELEGRAM_CA_CHAT_ID }}
         run: python scanner_ca.py
