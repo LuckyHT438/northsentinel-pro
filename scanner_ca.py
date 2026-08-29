@@ -46,6 +46,10 @@ MONTREAL_TZ = pytz.timezone('America/Toronto')
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_ONLY_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
 
+# Détection du mode de déclenchement du workflow
+GITHUB_EVENT = os.environ.get("GITHUB_EVENT_NAME", "")
+IS_MANUAL_RUN = (GITHUB_EVENT == "workflow_dispatch")
+
 CAPITAL = CONFIG['capital']
 RISK_PER_TRADE = CONFIG['risk_per_trade']
 MAX_CAPITAL_PER_POSITION = CONFIG['max_capital_per_position']
@@ -304,7 +308,7 @@ def run_news_scan():
         return
 
     # Construction du message en anglais
-    msg = "📰 <b>NorthSentinel CA Only</b> – Morning News Alert (9:25 AM ET)\n"
+    msg = "📰 <b>NorthSentinel CA Only</b>™️– Morning News Alert (9:25 AM ET)\n"
     msg += "═" * 35 + "\n\n"
 
     for a in alerts:
@@ -313,7 +317,7 @@ def run_news_scan():
         msg += f"   {a['title']}\n"
         msg += f"   {emoji} | {a['hours_ago']}h ago\n\n"
 
-    msg += "<i>Automated signal – Not financial advice.</i>"
+    msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
     send_telegram(msg)
 
 # ==================== FONCTIONS D'ANALYSE (STOCKS & ETF) ====================
@@ -729,6 +733,21 @@ def main():
 
     if not (morning or afternoon):
         print(f"⏰ Hors fenêtre (9:25-11:30 ou 13:00-15:30 ET) – Arrêt.")
+        # Envoi d'un message si le run est manuel
+        if IS_MANUAL_RUN:
+            msg = (
+                "🤖 <b>NorthSentinel CA Only</b>™️\n"
+                "Canadian intraday trading signals. Long & Short. Manual execution.\n"
+                f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⏰ Manual run triggered outside trading hours.\n"
+                "⏳ Scheduled active scan windows:\n"
+                "   • 9:25 AM – 11:30 AM ET\n"
+                "   • 1:00 PM – 3:30 PM ET\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Informational automated signal. Not financial or trading advice.</i>"
+            )
+            send_telegram(msg)
         return
 
     print("=" * 50)
@@ -776,7 +795,7 @@ def main():
         return
 
     # Construction du message Telegram (en anglais)
-    msg = f"🤖 <b>NorthSentinel CA Only</b> – Scan {now.strftime('%H:%M')} (ET)\n"
+    msg = f"🤖 <b>NorthSentinel CA Only</b>™️– Scan {now.strftime('%H:%M')} (ET)\n"
     msg += f"💰 Capital: ${CAPITAL:,.0f} | Bias: ⚪ Neutral (CA)\n"
     msg += f"📊 Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
     msg += "═" * 35 + "\n"
@@ -794,7 +813,7 @@ def main():
         msg += "\n🚀 <b>BEST ETF SETUP</b>\n❌ No valid ETF setup for this scan.\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "<i>Automated signal – Not financial advice.</i>"
+    msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
 
     send_telegram(msg)
     print("\n✅ Scan terminé.")
