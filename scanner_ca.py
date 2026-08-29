@@ -7,6 +7,7 @@ import yfinance as yf
 import time
 import random
 import os
+import sys
 import re
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
@@ -45,6 +46,9 @@ CONFIG = {
 MONTREAL_TZ = pytz.timezone('America/Toronto')
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
+
+# Détection du mode interactif (terminal) vs cron
+IS_INTERACTIVE = sys.stdin.isatty()
 
 CAPITAL = CONFIG['capital']
 RISK_PER_TRADE = CONFIG['risk_per_trade']
@@ -597,38 +601,11 @@ def build_setup_message(data, is_etf=False):
     return msg
 
 # ==================== FONCTION D'ATTENTE ====================
-def wait_until_next_scan(target_minute):
-    """Attend jusqu'à la prochaine minute cible (multiple de 5, ou 9:25 spécifique)."""
-    now = datetime.now(MONTREAL_TZ)
-    # Calculer la prochaine occurrence de l'heure/minute cible
-    # On suppose que target_minute est un tuple (heure, minute)
-    target_hour, target_min = target_minute
-    target_time = now.replace(hour=target_hour, minute=target_min, second=0, microsecond=0)
-    if target_time <= now:
-        # Si l'heure cible est déjà passée, ajouter 5 minutes pour la prochaine occurrence
-        # Mais pour 9h25 on ne veut qu'une occurrence par jour
-        # On va gérer différemment dans la boucle
-        pass
-    # Pour simplifier, on calcule le temps restant jusqu'à la prochaine minute cible
-    # On va arrondir à la minute supérieure
-    # On va créer une fonction qui prend une minute et attend jusqu'à cette minute précise
-    # On utilise datetime pour calculer la différence
-    now = datetime.now(MONTREAL_TZ)
-    target_dt = now.replace(minute=target_min, second=0, microsecond=0)
-    # Si la minute cible est inférieure à la minute actuelle, on ajoute une heure
-    if target_dt <= now:
-        # Pour les minutes multiples de 5, on ajoute 5 minutes
-        # Mais on peut aussi utiliser la prochaine occurrence
-        # On va plutôt utiliser un calcul de différence
-        # On peut utiliser le modulo pour trouver la prochaine minute multiple de 5
-        pass
-
 def wait_until_target(target_hour, target_minute):
     """Attend jusqu'à l'heure:minute cible."""
     now = datetime.now(MONTREAL_TZ)
     target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
     if target <= now:
-        # Si déjà passé, on ajoute 5 minutes pour la prochaine occurrence
         target += timedelta(minutes=5)
     diff = (target - now).total_seconds()
     if diff > 0:
@@ -644,6 +621,21 @@ def main():
     # Vérifier si le marché est fermé (week-end ou férié)
     if is_ca_market_closed(now):
         print("🏖️ Marché CA fermé – Arrêt.")
+        if IS_INTERACTIVE:
+            msg = (
+                "🤖 <b>NorthSentinel CA Only</b>™️\n"
+                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
+                f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⏰ Manual run triggered on a closed market day (weekend or holiday).\n"
+                "The scanner only runs on Canadian market days during active windows.\n"
+                "⏳ Scheduled active scan windows:\n"
+                "   • 9:25 AM – 11:30 AM ET\n"
+                "   • 1:00 PM – 3:30 PM ET\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Informational automated signal. Not financial or trading advice.</i>"
+            )
+            send_telegram(msg)
         return
 
     # Déterminer la session en fonction de l'heure de lancement
@@ -660,6 +652,20 @@ def main():
         print("🌙 Session APRÈS-MIDI détectée.")
     else:
         print("⏰ Lancement hors des plages horaires (9h-11h30 ou 13h-15h30) – Arrêt.")
+        if IS_INTERACTIVE:
+            msg = (
+                "🤖 <b>NorthSentinel CA Only</b>™️\n"
+                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
+                f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⏰ Manual run triggered outside trading hours.\n"
+                "⏳ Scheduled active scan windows:\n"
+                "   • 9:25 AM – 11:30 AM ET\n"
+                "   • 1:00 PM – 3:30 PM ET\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Informational automated signal. Not financial or trading advice.</i>"
+            )
+            send_telegram(msg)
         return
 
     # Attendre le début de la session si nécessaire
@@ -678,28 +684,20 @@ def main():
             print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
             break
 
-        # Déterminer la prochaine action
         current_hour, current_min = now.hour, now.minute
 
-        # Si c'est la première itération et qu'on est avant 9h25 (matin) ou avant 13h (après-midi) on attend le début
-        # Déjà géré par l'attente initiale
-
-        # Si on est exactement à 9h25 (session matin) et que ce n'est pas encore fait, faire scan news
+        # Si session matin et 9h25, faire scan news (une seule fois)
         if session == "morning" and current_hour == 9 and current_min == 25 and not first_scan_done:
             run_news_scan()
             first_scan_done = True
-            # Après le scan news, on attend 5 minutes pour le prochain scan (9h30)
             wait_until_target(9, 30)
             continue
 
-        # Sinon, on scanne les prix toutes les 5 minutes
-        # On vérifie si la minute actuelle est un multiple de 5 (ou 9h25 déjà traité)
+        # Sinon, scan des prix toutes les 5 minutes (multiples de 5, sauf 9h25 déjà traité)
         if current_min % 5 == 0:
-            # Mais on ne veut pas scanner à 9h25 (déjà fait) ni à 11h30? si on est à 11h30, on scanne puis on sort après
-            # On va scanner à toutes les minutes multiples de 5, sauf 9h25 si déjà fait
             if not (session == "morning" and current_hour == 9 and current_min == 25 and first_scan_done):
                 print(f"\n📊 Scan de prix à {now.strftime('%H:%M')} (session {session})")
-                # Exécuter les scans
+                # Scans
                 stocks_results = []
                 for ticker in STOCK_TICKERS:
                     print(f"  - {ticker}...", end=" ")
@@ -741,14 +739,11 @@ def main():
                 else:
                     print("ℹ️ Aucun setup valide – Pas de message Telegram.")
         # Attendre la prochaine minute multiple de 5
-        # Calculer la prochaine minute multiple de 5
         next_min = ((current_min // 5) + 1) * 5
         next_hour = current_hour
         if next_min == 60:
             next_min = 0
             next_hour += 1
-        # Si on est à 9h25 et qu'on a déjà fait le scan news, on doit attendre 9h30, mais on a déjà géré
-        # Sinon, on attend la prochaine minute cible
         wait_until_target(next_hour, next_min)
 
 if __name__ == "__main__":
