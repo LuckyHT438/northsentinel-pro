@@ -43,7 +43,7 @@ CONFIG = {
 
 # ==================== PARAMÈTRES GLOBAUX ====================
 MONTREAL_TZ = pytz.timezone('America/Toronto')
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_TOKEN")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_ONLY_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
 
 # Détection du mode de déclenchement du workflow
