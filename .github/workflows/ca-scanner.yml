@@ -1,0 +1,31 @@
+name: 🇨🇦 NorthSentinel CA Only
+
+on:
+  schedule:
+    # Matin : 13h25 à 15h30 UTC (couvre 9h25-11h30 ET) — toutes les 5 min
+    - cron: '*/5 13-15 * * 1-5'
+    # Après-midi : 17h00 à 19h30 UTC (couvre 13h00-15h30 ET) — toutes les 5 min
+    - cron: '*/5 17-19 * * 1-5'
+  workflow_dispatch:  # Déclenchement manuel pour tests
+
+jobs:
+  scan-ca:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests yfinance beautifulsoup4 pytz urllib3
+
+      - name: Run CA Scanner
+        env:
+          TELEGRAM_CA_TOKEN: ${{ secrets.TELEGRAM_CA_ONLY_TOKEN }}
+          TELEGRAM_CA_CHAT_ID: ${{ secrets.TELEGRAM_CA_CHAT_ID }}
+        run: python northsentinel_ca_scanner/scanner_ca.py
