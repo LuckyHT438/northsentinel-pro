@@ -28,4 +28,4 @@ jobs:
         env:
           TELEGRAM_CA_TOKEN: ${{ secrets.TELEGRAM_CA_ONLY_TOKEN }}
           TELEGRAM_CA_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python northsentinel_ca_scanner/scanner_ca.py
+        run: python scanner_ca.py
