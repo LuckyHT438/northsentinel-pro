@@ -634,7 +634,7 @@ def main():
         print("🏖️ Marché CA fermé – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
-                "🤖 <b>NorthSentinel CA Only</b>™️\n"
+                "🤖 <b>NorthSentinel CA Only</b>™\n"
                 "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
                 f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -665,7 +665,7 @@ def main():
         print("⏰ Lancement hors des plages horaires (9h-11h30 ou 13h-15h30) – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
-                "🤖 <b>NorthSentinel CA Only</b>™️\n"
+                "🤖 <b>NorthSentinel CA Only</b>™\n"
                 "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
                 f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -730,7 +730,7 @@ def main():
                 best_stock = max(stocks_results, key=lambda x: (x['score'], x['vol_ratio'])) if stocks_results else None
                 best_etf = max(etfs_results, key=lambda x: (x['score'], x['vol_ratio'])) if etfs_results else None
                 if best_stock or best_etf:
-                    msg = "🤖 <b>NorthSentinel CA Only</b>™️\n"
+                    msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
                     msg += f"<i>Scan {now.strftime('%H:%M')} (ET) | Bias: ⚪ Neutral (CA)</i>\n"
                     msg += f"<i>💰 Capital: ${CAPITAL:,.0f} | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs</i>\n"
                     msg += "═" * 35 + "\n"
