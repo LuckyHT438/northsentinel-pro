@@ -30,9 +30,10 @@ CONFIG = {
     "tickers": {
         "stocks": [
             "MFC.TO", "GWO.TO", "POW.TO", "SU.TO", "CNQ.TO",
-            "CVE.TO", "MEG.TO", "WCP.TO", "ABX.TO", "K.TO",
+            "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI.B.TO",
-            "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO", "SNC.TO"
+            "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO", "SNC.TO",
+            "ATZ.TO", "GRGD.TO, "SPCX.TO"
         ],
         "etfs": [
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
