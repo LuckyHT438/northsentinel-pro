@@ -38,7 +38,7 @@ CONFIG = {
         "etfs": [
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
             "XMA.TO", "XIT.TO", "XST.TO", "XRE.TO", "XUT.TO",
-            "ZSP.TO", "XIC.TO", "HCLN.TO"
+            "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO"
         ]
     }
 }
