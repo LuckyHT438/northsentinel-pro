@@ -19,11 +19,11 @@ from urllib3.util.retry import Retry
 CONFIG = {
     "market": "CA",
     "capital": 1_000_000,
-    "risk_per_trade": 0.02,           # 2% du capital par trade
-    "max_capital_per_position": 0.10, # 10% maximum du capital alloué à une position
+    "risk_per_trade": 0.02,
+    "max_capital_per_position": 0.10,
     "max_spread_pct": 5.0,
-    "score_min_stocks": 5,            # sur 7
-    "score_min_etfs": 4,              # sur 5
+    "score_min_stocks": 5,
+    "score_min_etfs": 4,
     "price_min_stocks": 2.00,
     "price_max_stocks": 300.00,
     "price_max_etfs": 9999.00,
@@ -33,12 +33,21 @@ CONFIG = {
             "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI.B.TO",
             "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO", "SNC.TO",
-            "ATZ.TO", "GRGD.TO, "SPCX.TO"
+            "ATZ.TO", "GRGD.TO", "SPCX.TO", "CSU.TO", "ATD.TO",
+            "MRU.TO", "L.TO", "EMP.A.TO", "CP.TO", "CNR.TO",
+            "TFII.TO", "MDA.TO", "BBD.B.TO", "CGO.TO", "QBR.B.TO",
+            "IFC.TO", "SLF.TO", "RBA.TO", "AND.TO", "WELL.TO",
+            "GIB.A.TO", "OTEX.TO", "DSG.TO", "CLS.TO", "KTN.TO",
+            "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
+            "BEP.UN.TO", "BAM.TO", "BN.TO", "NTR.TO"
         ],
         "etfs": [
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
-            "XMA.TO", "XIT.TO", "XST.TO", "XRE.TO", "XUT.TO",
-            "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO"
+            "XMA.TO", "XIT.TO", "XST.TO", "XRE.TO", "XUT.TO,
+            "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO", "HXS.TO",
+            "HXQ.TO", "VFV.TO", "XQQ.TO", "HHL.TO", "TXF.TO",
+            "HUTL.TO", "ZDI.TO", "VI.TO", "VRE.TO", "FIE.TO",
+            "ZDC.TO", "ZWA.TO"
         ]
     }
 }
