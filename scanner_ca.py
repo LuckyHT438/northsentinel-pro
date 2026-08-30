@@ -31,15 +31,15 @@ CONFIG = {
         "stocks": [
             "MFC.TO", "GWO.TO", "POW.TO", "SU.TO", "CNQ.TO",
             "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
-            "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI.B.TO",
+            "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI-B.TO",
             "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO", "SNC.TO",
             "ATZ.TO", "GRGD.TO", "SPCX.TO", "CSU.TO", "ATD.TO",
             "MRU.TO", "L.TO", "EMP.A.TO", "CP.TO", "CNR.TO",
-            "TFII.TO", "MDA.TO", "BBD.B.TO", "CGO.TO", "QBR.B.TO",
+            "TFII.TO", "MDA.TO", "BBD-B.TO", "CGO.TO", "QBR-B.TO",
             "IFC.TO", "SLF.TO", "RBA.TO", "AND.TO", "WELL.TO",
-            "GIB.A.TO", "OTEX.TO", "DSG.TO", "CLS.TO", "KTN.TO",
+            "GIB-A.TO", "OTEX.TO", "DSG.TO", "CLS.TO", "KTN.TO",
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
-            "BEP.UN.TO", "BAM.TO", "BN.TO", "NTR.TO"
+            "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO"
         ],
         "etfs": [
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
