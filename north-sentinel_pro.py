@@ -1332,7 +1332,7 @@ def main():
         analysed_actions = 0
         
         for i, ticker in enumerate(tickers_actions):
-            if time.time() - START_TIME > 55:
+            if time.time() - START_TIME > 120:
                 print(f"\n⚠️ TIMEOUT 55s - {i}/{len(tickers_actions)} stocks processed")
                 break
             print(f"[STOCK {i+1}/{len(tickers_actions)}] {ticker}...", end=" ")
@@ -1357,8 +1357,8 @@ def main():
         analysed_fnb = 0
         
         for i, ticker in enumerate(tickers_fnb):
-            if time.time() - START_TIME > 55:
-                print(f"\n⚠️ TIMEOUT 55s - {i}/{len(tickers_fnb)} ETFs processed")
+            if time.time() - START_TIME > 120:
+                print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_fnb)} ETFs processed")
                 break
             print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}...", end=" ")
             data = analyze_fnb(ticker)
@@ -1606,7 +1606,7 @@ def main():
     analysed_actions = 0
     
     for i, ticker in enumerate(tickers_actions):
-        if time.time() - START_TIME > 55:
+        if time.time() - START_TIME > 120:
             print(f"\n⚠️ TIMEOUT 55s - {i}/{len(tickers_actions)} stocks processed")
             break
         print(f"[STOCK {i+1}/{len(tickers_actions)}] {ticker}...", end=" ")
@@ -1632,8 +1632,8 @@ def main():
     analysed_fnb = 0
     
     for i, ticker in enumerate(tickers_fnb):
-        if time.time() - START_TIME > 55:
-            print(f"\n⚠️ TIMEOUT 55s - {i}/{len(tickers_fnb)} ETFs processed")
+        if time.time() - START_TIME > 120:
+            print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_fnb)} ETFs processed")
             break
         print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}...", end=" ")
         data = analyze_fnb(ticker)
