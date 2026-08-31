@@ -43,7 +43,7 @@ CONFIG = {
         ],
         "etfs": [
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
-            "XMA.TO", "XIT.TO", "XST.TO", "XRE.TO", "XUT.TO,
+            "XMA.TO", "XIT.TO", "XST.TO", "XRE.TO", "XUT.TO",
             "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO", "HXS.TO",
             "HXQ.TO", "VFV.TO", "XQQ.TO", "HHL.TO", "TXF.TO",
             "HUTL.TO", "ZDI.TO", "VI.TO", "VRE.TO", "FIE.TO",
