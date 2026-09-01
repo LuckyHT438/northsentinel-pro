@@ -6,6 +6,9 @@ on:
 jobs:
   run-pro-recap:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # ← Si le script pousse des fichiers (pro_recap_signals.json par exemple)
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -22,4 +25,6 @@ jobs:
         env:
           TELEGRAM_PRO_TOKEN: ${{ secrets.TELEGRAM_PRO_TOKEN }}
           TELEGRAM_PRO_CHAT_ID: ${{ secrets.TELEGRAM_PRO_CHAT_ID }}
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}          # ← AJOUT : Si le recap pousse vers northsentinel-data
+          PUBLIC_CHANNEL_ID: ${{ secrets.PUBLIC_CHANNEL_ID }}      # ← AJOUT : Pour envoyer le recap au canal public
         run: python pro_post_market_recap.py
