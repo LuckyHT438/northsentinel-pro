@@ -370,10 +370,11 @@ def analyze_stock(ticker):
             return None
         gap = ((price - prev_close) / prev_close) * 100
         score = 0
-        if 5 <= gap <= 40:
+        # Seuils assouplis pour les stocks
+        if 3 <= gap <= 40:
             direction = "LONG"
             score += 1
-        elif -40 <= gap <= -5:
+        elif -40 <= gap <= -3:
             direction = "SHORT"
             score += 1
         else:
@@ -381,20 +382,20 @@ def analyze_stock(ticker):
         volume = info.get('volume', 0)
         avg_vol = info.get('averageVolume', volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
-        if vol_ratio > 1.5:
+        if vol_ratio > 1.2:   # abaissé de 1.5 à 1.2
             score += 1
         float_shares = info.get('floatShares')
-        if float_shares is not None and float_shares < 50_000_000:
+        if float_shares is not None and float_shares < 100_000_000:  # assoupli à 100M
             score += 1
         elif float_shares is None:
             score += 1
         beta = info.get('beta')
-        if beta is not None and beta > 1.0:
+        if beta is not None and beta > 0.8:  # abaissé de 1.0 à 0.8
             score += 1
         elif beta is None:
             score += 1
         short_ratio = info.get('shortRatio')
-        if short_ratio is not None and short_ratio > 2:
+        if short_ratio is not None and short_ratio > 1.5:  # abaissé de 2.0 à 1.5
             score += 1
         elif short_ratio is None:
             score += 1
@@ -571,7 +572,7 @@ def get_verdict(confidence):
     else:
         return "Poor", "🔴"
 
-def build_setup_message(data, is_etf=False):
+def build_setup_message(data, is_etf=False, bias="⚪ Neutral (CA)"):
     max_score = 7 if not is_etf else 5
     entry = data['price']
     direction = data['direction']
@@ -603,6 +604,7 @@ def build_setup_message(data, is_etf=False):
         msg += f"   Cap: {data['cap_category']}\n"
     if is_etf:
         msg += f"   AUM: {data['aum_m']}M$\n"
+    msg += f"   Bias: {bias}\n"   # déplacé ici, juste avant le verdict
     msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text}\n"
     msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
     msg += f"   📦 QTY: {qty} {'shares' if not is_etf else 'units'}\n"
@@ -613,11 +615,12 @@ def build_setup_message(data, is_etf=False):
 
 # ==================== FONCTION D'ATTENTE ====================
 def wait_until_target(target_hour, target_minute):
-    """Attend jusqu'à l'heure:minute cible."""
+    """Attend jusqu'à l'heure:minute cible (pour les scans multiples de 15 minutes)."""
     now = datetime.now(MONTREAL_TZ)
     target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+    # Si la cible est déjà passée, on ajoute 15 minutes
     if target <= now:
-        target += timedelta(minutes=5)
+        target += timedelta(minutes=15)
     diff = (target - now).total_seconds()
     if diff > 0:
         print(f"⏳ Attente jusqu'à {target.strftime('%H:%M')}... ({diff/60:.1f} min)")
@@ -650,7 +653,6 @@ def main():
         return
 
     # Déterminer la session en fonction de l'heure de lancement
-    # Matin : 9h00-11h30, Après-midi : 13h00-15h30
     if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
         session = "morning"
         start_hour, start_min = 9, 25
@@ -687,25 +689,38 @@ def main():
         now = datetime.now(MONTREAL_TZ)
 
     # Boucle principale
-    first_scan_done = False
+    first_scan_done = False  # pour le scan news à 9h25 (une seule fois)
     while True:
         now = datetime.now(MONTREAL_TZ)
         # Vérifier si on a dépassé l'heure de fin
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
+            # Envoyer un message de fin de session
+            session_label = "Morning" if session == "morning" else "Afternoon"
+            msg = (
+                f"🤖 <b>NorthSentinel CA Only</b>™\n"
+                f"<i>{session_label} Session ended – {now.strftime('%H:%M')} (ET)</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🛑 Automatic shutdown completed.\n"
+                "⏳ Next session will start at the scheduled time.\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Informational automated signal. Not financial or trading advice.</i>"
+            )
+            send_telegram(msg)
             break
 
         current_hour, current_min = now.hour, now.minute
 
-        # Si session matin et 9h25, faire scan news (une seule fois)
+        # Si session matin et 9h25, faire scan news (une seule fois) et envoyer immédiatement
         if session == "morning" and current_hour == 9 and current_min == 25 and not first_scan_done:
             run_news_scan()
             first_scan_done = True
-            wait_until_target(9, 30)
+            # On ne fait pas d'attente ici – on continue la boucle pour le prochain scan à 9h30
             continue
 
-        # Sinon, scan des prix toutes les 5 minutes (multiples de 5, sauf 9h25 déjà traité)
-        if current_min % 5 == 0:
+        # Sinon, scan des prix toutes les 15 minutes (multiples de 15)
+        if current_min % 15 == 0:
+            # Éviter de scanner à 9h25 (déjà traité) et à 9h30 (premier scan prix)
             if not (session == "morning" and current_hour == 9 and current_min == 25 and first_scan_done):
                 print(f"\n📊 Scan de prix à {now.strftime('%H:%M')} (session {session})")
                 # Scans
@@ -731,17 +746,18 @@ def main():
                 best_etf = max(etfs_results, key=lambda x: (x['score'], x['vol_ratio'])) if etfs_results else None
                 if best_stock or best_etf:
                     msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
-                    msg += f"<i>Scan {now.strftime('%H:%M')} (ET) | Bias: ⚪ Neutral (CA)</i>\n"
-                    msg += f"<i>💰 Capital: ${CAPITAL:,.0f} | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs</i>\n"
+                    # L'en-tête ne contient plus le Bias
+                    msg += f"<i>Scan {now.strftime('%H:%M')} (ET) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs</i>\n"
+                    msg += f"<i>💰 Capital: ${CAPITAL:,.0f}</i>\n"
                     msg += "═" * 35 + "\n"
                     if best_stock:
                         msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
-                        msg += build_setup_message(best_stock, is_etf=False)
+                        msg += build_setup_message(best_stock, is_etf=False, bias="⚪ Neutral (CA)")
                     else:
                         msg += "\n🚀 <b>BEST STOCK SETUP</b>\n❌ No valid stock setup for this scan.\n"
                     if best_etf:
                         msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
-                        msg += build_setup_message(best_etf, is_etf=True)
+                        msg += build_setup_message(best_etf, is_etf=True, bias="⚪ Neutral (CA)")
                     else:
                         msg += "\n🚀 <b>BEST ETF SETUP</b>\n❌ No valid ETF setup for this scan.\n"
                     msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -749,8 +765,8 @@ def main():
                     send_telegram(msg)
                 else:
                     print("ℹ️ Aucun setup valide – Pas de message Telegram.")
-        # Attendre la prochaine minute multiple de 5
-        next_min = ((current_min // 5) + 1) * 5
+        # Attendre la prochaine minute multiple de 15
+        next_min = ((current_min // 15) + 1) * 15
         next_hour = current_hour
         if next_min == 60:
             next_min = 0
