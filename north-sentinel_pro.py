@@ -23,6 +23,7 @@ from pro_macro_context import get_macro_context
 # Récupération depuis les secrets GitHub
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_PRO_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_PRO_CHAT_ID")
+PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL_ID", "")  # ← NOUVEAU
 MONTREAL_TZ = pytz.timezone('America/Toronto')
 DATA_REPO_TOKEN = os.environ.get("DATA_REPO_TOKEN")
 
@@ -301,24 +302,40 @@ canadian_symbols = {
     "MG.TO", "RBA.TO", "TFII.TO"
 }
 
-def send_telegram(message):
+# ============================================================
+# FONCTION send_telegram MODIFIÉE (accepte plusieurs destinataires)
+# ============================================================
+def send_telegram(message, chat_ids=None):
     if not TELEGRAM_TOKEN:
         print("⚠️ Telegram token missing")
         return False
 
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-        r = requests.post(url, json=payload, timeout=10)
-        if r.status_code == 200:
-            print(f"✅ Telegram Pro sent - Status: {r.status_code}")
-            return True
-        else:
-            print(f"❌ Error: {r.status_code} - {r.text}")
-            return False
-    except Exception as e:
-        print(f"❌ Exception: {e}")
-        return False
+    # Si aucun destinataire n'est fourni, on utilise le propriétaire (comportement actuel)
+    if chat_ids is None:
+        chat_ids = [TELEGRAM_CHAT_ID]
+
+    # Si chat_ids est un entier, on le convertit en liste
+    if not isinstance(chat_ids, list):
+        chat_ids = [chat_ids]
+
+    success = True
+    for chat_id in chat_ids:
+        if not chat_id:
+            continue
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
+            r = requests.post(url, json=payload, timeout=10)
+            if r.status_code == 200:
+                print(f"✅ Message envoyé à {chat_id}")
+            else:
+                print(f"❌ Échec pour {chat_id}: {r.status_code} - {r.text}")
+                success = False
+        except Exception as e:
+            print(f"❌ Erreur pour {chat_id}: {e}")
+            success = False
+
+    return success
 
 def get_exchange_from_info(info):
     exchange = info.get('exchange', '')
@@ -1333,7 +1350,7 @@ def main():
         
         for i, ticker in enumerate(tickers_actions):
             if time.time() - START_TIME > 120:
-                print(f"\n⚠️ TIMEOUT 55s - {i}/{len(tickers_actions)} stocks processed")
+                print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_actions)} stocks processed")
                 break
             print(f"[STOCK {i+1}/{len(tickers_actions)}] {ticker}...", end=" ")
             data = get_stock_data(ticker, rate_limited_flag)
@@ -1358,7 +1375,7 @@ def main():
         
         for i, ticker in enumerate(tickers_fnb):
             if time.time() - START_TIME > 180:
-                print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_fnb)} ETFs processed")
+                print(f"\n⚠️ TIMEOUT 180s - {i}/{len(tickers_fnb)} ETFs processed")
                 break
             print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}...", end=" ")
             data = analyze_fnb(ticker)
@@ -1567,7 +1584,17 @@ def main():
         print("\n" + "=" * 50)
         print(f"⏱️ Total time: {elapsed:.1f}s")
         print("📤 Sending Telegram...")
-        send_telegram(message)
+        
+        # === ENVOI DU RECAP AU PROPRIÉTAIRE ET AU CANAL PUBLIC ===
+        recap_recipients = [TELEGRAM_CHAT_ID]
+        if PUBLIC_CHANNEL_ID:
+            try:
+                recap_recipients.append(int(PUBLIC_CHANNEL_ID))
+                print(f"📢 Recap envoyé également au canal public (ID: {PUBLIC_CHANNEL_ID})")
+            except ValueError:
+                print(f"⚠️ PUBLIC_CHANNEL_ID invalide: {PUBLIC_CHANNEL_ID}")
+        
+        send_telegram(message, chat_ids=recap_recipients)
         print("=" * 50)
         return
     
@@ -1607,7 +1634,7 @@ def main():
     
     for i, ticker in enumerate(tickers_actions):
         if time.time() - START_TIME > 120:
-            print(f"\n⚠️ TIMEOUT 55s - {i}/{len(tickers_actions)} stocks processed")
+            print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_actions)} stocks processed")
             break
         print(f"[STOCK {i+1}/{len(tickers_actions)}] {ticker}...", end=" ")
         data = get_stock_data(ticker, rate_limited_flag)
@@ -1632,8 +1659,8 @@ def main():
     analysed_fnb = 0
     
     for i, ticker in enumerate(tickers_fnb):
-        if time.time() - START_TIME > 120:
-            print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_fnb)} ETFs processed")
+        if time.time() - START_TIME > 180:
+            print(f"\n⚠️ TIMEOUT 180s - {i}/{len(tickers_fnb)} ETFs processed")
             break
         print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}...", end=" ")
         data = analyze_fnb(ticker)
@@ -1842,7 +1869,17 @@ def main():
     print("\n" + "=" * 50)
     print(f"⏱️ Total time: {elapsed:.1f}s")
     print("📤 Sending Telegram...")
-    send_telegram(message)
+    
+    # === ENVOI DU RECAP AU PROPRIÉTAIRE ET AU CANAL PUBLIC ===
+    recap_recipients = [TELEGRAM_CHAT_ID]
+    if PUBLIC_CHANNEL_ID:
+        try:
+            recap_recipients.append(int(PUBLIC_CHANNEL_ID))
+            print(f"📢 Recap envoyé également au canal public (ID: {PUBLIC_CHANNEL_ID})")
+        except ValueError:
+            print(f"⚠️ PUBLIC_CHANNEL_ID invalide: {PUBLIC_CHANNEL_ID}")
+    
+    send_telegram(message, chat_ids=recap_recipients)
     print("=" * 50)
 
 if __name__ == "__main__":
