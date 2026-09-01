@@ -1357,7 +1357,7 @@ def main():
         analysed_fnb = 0
         
         for i, ticker in enumerate(tickers_fnb):
-            if time.time() - START_TIME > 120:
+            if time.time() - START_TIME > 180:
                 print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_fnb)} ETFs processed")
                 break
             print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}...", end=" ")
