@@ -6,6 +6,9 @@ on:
 jobs:
   run-pro-scalper:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # ← AJOUT : Permet de pousser pro_signals_today.json vers le dépôt de données
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -22,5 +25,6 @@ jobs:
         env:
           TELEGRAM_PRO_TOKEN: ${{ secrets.TELEGRAM_PRO_TOKEN }}
           TELEGRAM_PRO_CHAT_ID: ${{ secrets.TELEGRAM_PRO_CHAT_ID }}
-          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
-        run: python north-sentinel_pro.py
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}          # ← AJOUT : Pour pousser les signaux vers northsentinel-data
+          PUBLIC_CHANNEL_ID: ${{ secrets.PUBLIC_CHANNEL_ID }}      # ← AJOUT : Pour envoyer le recap au canal public
+        run: python northsentinel_pro.py
