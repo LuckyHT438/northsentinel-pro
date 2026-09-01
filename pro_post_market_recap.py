@@ -5,6 +5,7 @@
 import json
 import os
 import random
+import requests
 from datetime import datetime
 import pytz
 import yfinance as yf
@@ -294,28 +295,60 @@ def _load_today_signals():
         return []
 
 
-def send_recap(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID):
-    """Envoie le récap Telegram. Appelé par le workflow récap."""
-    import requests
-
+def send_recap(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PUBLIC_CHANNEL_ID=None):
+    """
+    Envoie le récap Telegram au propriétaire et, si fourni, au canal public.
+    """
     message = build_recap_message()
 
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram tokens missing")
+    if not TELEGRAM_TOKEN:
+        print("⚠️ Telegram token missing")
         return False
 
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-        r = requests.post(url, json=payload, timeout=10)
-        print(f"✅ Recap sent - Status: {r.status_code}")
-        return True
-    except Exception as e:
-        print(f"❌ Recap error: {e}")
+    # === CONSTRUCTION DE LA LISTE DES DESTINATAIRES ===
+    recipients = []
+
+    if TELEGRAM_CHAT_ID:
+        try:
+            recipients.append(int(TELEGRAM_CHAT_ID))
+            print(f"✅ Récipiendaire ajouté : Propriétaire ({TELEGRAM_CHAT_ID})")
+        except ValueError:
+            print(f"⚠️ TELEGRAM_CHAT_ID invalide : {TELEGRAM_CHAT_ID}")
+
+    if PUBLIC_CHANNEL_ID:
+        try:
+            channel_id = int(PUBLIC_CHANNEL_ID)
+            recipients.append(channel_id)
+            print(f"✅ Récipiendaire ajouté : Canal public ({PUBLIC_CHANNEL_ID})")
+        except ValueError:
+            print(f"⚠️ PUBLIC_CHANNEL_ID invalide : {PUBLIC_CHANNEL_ID}")
+
+    if not recipients:
+        print("⚠️ Aucun destinataire valide — message non envoyé")
         return False
+
+    # === ENVOI À CHAQUE DESTINATAIRE ===
+    success = True
+    for chat_id in recipients:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
+            r = requests.post(url, json=payload, timeout=10)
+            if r.status_code == 200:
+                print(f"✅ Recap envoyé à {chat_id}")
+            else:
+                print(f"❌ Échec pour {chat_id}: {r.status_code} - {r.text}")
+                success = False
+        except Exception as e:
+            print(f"❌ Erreur pour {chat_id}: {e}")
+            success = False
+
+    return success
 
 
 if __name__ == "__main__":
     TELEGRAM_TOKEN = os.environ.get("TELEGRAM_PRO_TOKEN")
     TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_PRO_CHAT_ID")
-    send_recap(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+    PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL_ID", "")  # ← NOUVEAU
+
+    send_recap(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PUBLIC_CHANNEL_ID)
