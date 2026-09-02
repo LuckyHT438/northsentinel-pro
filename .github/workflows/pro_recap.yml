@@ -7,7 +7,7 @@ jobs:
   run-pro-recap:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # ← Si le script pousse des fichiers (pro_recap_signals.json par exemple)
+      contents: write   # Pour le push éventuel (si le recap génère des fichiers)
 
     steps:
       - name: Checkout repo
@@ -21,10 +21,23 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # ⬇️ NOUVELLE ÉTAPE : Récupérer les signaux depuis le dépôt de données
+      - name: Fetch signals from data repo
+        env:
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
+        run: |
+          if [ -n "$DATA_REPO_TOKEN" ]; then
+            git clone https://x-access-token:${DATA_REPO_TOKEN}@github.com/LuckyHT438/northsentinel-data.git data-repo
+            # Copier le fichier s'il existe
+            cp data-repo/pro_signals_today.json . || echo "ℹ️ Aucun signal trouvé dans le dépôt de données"
+          else
+            echo "⚠️ DATA_REPO_TOKEN manquant, impossible de récupérer les signaux"
+          fi
+
       - name: Run Recap
         env:
           TELEGRAM_PRO_TOKEN: ${{ secrets.TELEGRAM_PRO_TOKEN }}
           TELEGRAM_PRO_CHAT_ID: ${{ secrets.TELEGRAM_PRO_CHAT_ID }}
-          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}          # ← AJOUT : Si le recap pousse vers northsentinel-data
-          PUBLIC_CHANNEL_ID: ${{ secrets.PUBLIC_CHANNEL_ID }}      # ← AJOUT : Pour envoyer le recap au canal public
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
+          PUBLIC_CHANNEL_ID: ${{ secrets.PUBLIC_CHANNEL_ID }}
         run: python pro_post_market_recap.py
