@@ -23,7 +23,7 @@ from pro_macro_context import get_macro_context
 # Récupération depuis les secrets GitHub
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_PRO_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_PRO_CHAT_ID")
-PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL_ID", "")  # ← NOUVEAU
+PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL_ID", "")  # Gardé pour info, mais non utilisé pour les signaux
 MONTREAL_TZ = pytz.timezone('America/Toronto')
 DATA_REPO_TOKEN = os.environ.get("DATA_REPO_TOKEN")
 
@@ -303,7 +303,7 @@ canadian_symbols = {
 }
 
 # ============================================================
-# FONCTION send_telegram MODIFIÉE (accepte plusieurs destinataires)
+# FONCTION send_telegram (accepte plusieurs destinataires)
 # ============================================================
 def send_telegram(message, chat_ids=None):
     if not TELEGRAM_TOKEN:
@@ -1585,16 +1585,8 @@ def main():
         print(f"⏱️ Total time: {elapsed:.1f}s")
         print("📤 Sending Telegram...")
         
-        # === ENVOI DU RECAP AU PROPRIÉTAIRE ET AU CANAL PUBLIC ===
-        recap_recipients = [TELEGRAM_CHAT_ID]
-        if PUBLIC_CHANNEL_ID:
-            try:
-                recap_recipients.append(int(PUBLIC_CHANNEL_ID))
-                print(f"📢 Recap envoyé également au canal public (ID: {PUBLIC_CHANNEL_ID})")
-            except ValueError:
-                print(f"⚠️ PUBLIC_CHANNEL_ID invalide: {PUBLIC_CHANNEL_ID}")
-        
-        send_telegram(message, chat_ids=recap_recipients)
+        # 🔧 ENVOI UNIQUEMENT AU PROPRIÉTAIRE (privé)
+        send_telegram(message)
         print("=" * 50)
         return
     
@@ -1870,16 +1862,8 @@ def main():
     print(f"⏱️ Total time: {elapsed:.1f}s")
     print("📤 Sending Telegram...")
     
-    # === ENVOI DU RECAP AU PROPRIÉTAIRE ET AU CANAL PUBLIC ===
-    recap_recipients = [TELEGRAM_CHAT_ID]
-    if PUBLIC_CHANNEL_ID:
-        try:
-            recap_recipients.append(int(PUBLIC_CHANNEL_ID))
-            print(f"📢 Recap envoyé également au canal public (ID: {PUBLIC_CHANNEL_ID})")
-        except ValueError:
-            print(f"⚠️ PUBLIC_CHANNEL_ID invalide: {PUBLIC_CHANNEL_ID}")
-    
-    send_telegram(message, chat_ids=recap_recipients)
+    # 🔧 ENVOI UNIQUEMENT AU PROPRIÉTAIRE (privé)
+    send_telegram(message)
     print("=" * 50)
 
 if __name__ == "__main__":
