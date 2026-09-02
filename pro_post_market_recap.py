@@ -317,13 +317,20 @@ def build_recap_message():
         if stocks:
             best_stock = max(stocks, key=lambda x: x.get('score', 0))
             message += _format_setup(best_stock, "STOCK") + "\n\n"
+        else:
+            message += "🔹 <b>Best STOCK Setup — Today</b>\n"
+            message += "  No stock signals generated.\n\n"
 
         # 4. Meilleur setup ETF
         etfs = [s for s in signals if s.get('type') == 'ETF']
         if etfs:
             best_etf = max(etfs, key=lambda x: x.get('score', 0))
             message += _format_setup(best_etf, "ETF") + "\n\n"
+        else:
+            message += "🔹 <b>Best ETF Setup — Today</b>\n"
+            message += "  No ETF signals generated.\n\n"
     else:
+        # Aucun signal du tout
         message += "🔹 <b>Best STOCK Setup — Today</b>\n"
         message += "  No stock signals generated.\n\n"
         message += "🔹 <b>Best ETF Setup — Today</b>\n"
