@@ -27,4 +27,4 @@ jobs:
           TELEGRAM_PRO_CHAT_ID: ${{ secrets.TELEGRAM_PRO_CHAT_ID }}
           DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}          # ← AJOUT : Pour pousser les signaux vers northsentinel-data
           PUBLIC_CHANNEL_ID: ${{ secrets.PUBLIC_CHANNEL_ID }}      # ← AJOUT : Pour envoyer le recap au canal public
-        run: python northsentinel_pro.py
+        run: python north-sentinel_pro.py
