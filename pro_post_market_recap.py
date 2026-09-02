@@ -239,7 +239,7 @@ def _format_highlights(highlights, flag):
     return "\n".join(lines)
 
 
-def _format_setup(best, signal_type, label):
+def _format_setup(best, signal_type):
     """Formate le meilleur setup (STOCK ou ETF)"""
     if not best:
         return ""
