@@ -82,8 +82,8 @@ QUOTES = {
     ],
 }
 
-# === SECTEURS À SCANNER POUR LES HIGHLIGHTS ===
-MARKET_ETFS = {
+# === SECTEURS US ET CA SÉPARÉS ===
+MARKET_ETFS_US = {
     "XLE": "Energy",
     "XLF": "Financials",
     "XLV": "Healthcare",
@@ -98,7 +98,18 @@ MARKET_ETFS = {
     "QQQ": "Nasdaq 100",
     "SPY": "S&P 500",
     "IWM": "Russell 2000",
-    "XIU.TO": "TSX 60 (Canada)",
+}
+
+MARKET_ETFS_CA = {
+    "XIU.TO": "TSX 60",
+    "XGD.TO": "Gold Miners",
+    "XMA.TO": "Materials",
+    "XFN.TO": "Financials",
+    "XUT.TO": "Utilities",
+    "XEG.TO": "Energy",
+    "XIT.TO": "Technology",
+    "XHC.TO": "Healthcare",
+    "XRE.TO": "Real Estate",
 }
 
 # === FICHIER PERSISTANT ===
@@ -120,13 +131,16 @@ def _get_sector_performance(ticker):
     return None
 
 
-def _get_market_highlights():
-    """Scanne les secteurs et retourne les tops/flops + stats globales"""
+def _get_market_highlights(etf_dict, label):
+    """
+    Scanne un dictionnaire d'ETFs et retourne les tops/flops + biais.
+    label: 'US' ou 'CA'
+    """
     performances = {}
     up_count = 0
     down_count = 0
 
-    for ticker, name in MARKET_ETFS.items():
+    for ticker, name in etf_dict.items():
         change = _get_sector_performance(ticker)
         if change is not None:
             performances[name] = {"ticker": ticker, "change": change}
@@ -143,11 +157,11 @@ def _get_market_highlights():
     bottom = sorted_perf[-1] if sorted_perf else None
 
     if up_count > down_count:
-        bias = "🟢 Risk-on"
+        bias = f"🟢 Risk-on ({label})"
     elif down_count > up_count:
-        bias = "🔴 Risk-off"
+        bias = f"🔴 Risk-off ({label})"
     else:
-        bias = "⚪ Neutral"
+        bias = f"⚪ Neutral ({label})"
 
     return {
         "top": top,
@@ -173,7 +187,7 @@ def _get_signal_context(ticker, s_type):
     return None
 
 
-def _get_daily_quote(signals, highlights):
+def _get_daily_quote(signals, highlights_us, highlights_ca):
     """Sélectionne la citation la plus pertinente selon la séance"""
     if not signals:
         return random.choice(QUOTES["patience"])
@@ -182,16 +196,22 @@ def _get_daily_quote(signals, highlights):
     if len(signals) >= 3 and avg_score >= 5.5:
         return random.choice(QUOTES["execution"])
 
-    if highlights:
-        up = highlights.get("up_sectors", 0)
-        down = highlights.get("down_sectors", 0)
+    # Analyser les biais US et CA
+    up_total = 0
+    down_total = 0
+    if highlights_us:
+        up_total += highlights_us.get("up_sectors", 0)
+        down_total += highlights_us.get("down_sectors", 0)
+    if highlights_ca:
+        up_total += highlights_ca.get("up_sectors", 0)
+        down_total += highlights_ca.get("down_sectors", 0)
 
-        if down > up + 3:
-            return random.choice(QUOTES["risk"])
-        elif up > down + 3:
-            return random.choice(QUOTES["psychology"])
-        elif abs(up - down) <= 1:
-            return random.choice(QUOTES["mindset"])
+    if down_total > up_total + 3:
+        return random.choice(QUOTES["risk"])
+    elif up_total > down_total + 3:
+        return random.choice(QUOTES["psychology"])
+    elif abs(up_total - down_total) <= 1:
+        return random.choice(QUOTES["mindset"])
 
     best_gap = max(s.get('gap', 0) for s in signals) if signals else 0
     if best_gap > 15:
@@ -200,75 +220,118 @@ def _get_daily_quote(signals, highlights):
     return random.choice(QUOTES["mindset"])
 
 
+def _format_highlights(highlights, flag):
+    """Formate les highlights pour un marché donné"""
+    if not highlights:
+        return ""
+
+    lines = []
+    lines.append(f"{flag} {highlights['bias']}")
+    if highlights['top']:
+        name, data = highlights['top']
+        direction = "▲" if data['change'] > 0 else "▼"
+        lines.append(f"📈 Top: {name} ({data['ticker']}) {direction} {abs(data['change']):.1f}%")
+    if highlights['bottom']:
+        name, data = highlights['bottom']
+        direction = "▲" if data['change'] > 0 else "▼"
+        lines.append(f"📉 Bottom: {name} ({data['ticker']}) {direction} {abs(data['change']):.1f}%")
+
+    return "\n".join(lines)
+
+
+def _format_setup(best, signal_type, label):
+    """Formate le meilleur setup (STOCK ou ETF)"""
+    if not best:
+        return ""
+
+    ticker = best.get('ticker', '?')
+    score = best.get('score', '?')
+    gap = best.get('gap', 0)
+    vol_ratio = best.get('vol_ratio', 0)
+    entry = best.get('entry_price', 0)
+    cap_category = best.get('cap_category', 'N/A')
+    aum_m = best.get('aum_m', None)
+
+    # Récupérer le secteur via macro_context
+    sector = "N/A"
+    ctx = _get_signal_context(ticker, signal_type)
+    if ctx:
+        sector = ctx
+
+    lines = []
+    if aum_m is not None:
+        lines.append(f"🔹 <b>Best {signal_type} Setup — Today</b>")
+        lines.append(f"{ticker} ({signal_type}) | Score: {score}/5 | Sector: {sector} | AUM: {aum_m:.1f}M$")
+    else:
+        lines.append(f"🔹 <b>Best {signal_type} Setup — Today</b>")
+        lines.append(f"{ticker} ({signal_type}) | Score: {score}/9 | Sector: {sector} | Cap: {cap_category}")
+
+    lines.append(f"Gap: {gap:.1f}% | Volume: x{vol_ratio:.1f}")
+    lines.append(f"Entry: ${entry:.2f}")
+
+    # Commentaire personnalisé
+    if signal_type == "STOCK" and score >= 6:
+        lines.append("Why it stood out: High score + strong volume combo.")
+    elif signal_type == "ETF" and score >= 5:
+        lines.append("Why it stood out: Highest quality ETF setup of the session.")
+    elif gap >= 10:
+        lines.append("Why it stood out: Exceptional gap size.")
+    else:
+        lines.append(f"Why it stood out: Best overall {signal_type} setup of the session.")
+
+    return "\n".join(lines)
+
+
 def build_recap_message():
-    """Construit le message récap enrichi"""
+    """Construit le message récap enrichi avec structure améliorée"""
     now_mtl = datetime.now(MONTREAL_TZ)
 
     message = f"📊 <b>NorthSentinel Pro™ — Session Recap</b>\n"
     message += f"📅 {now_mtl.strftime('%Y-%m-%d')} (Montreal)\n"
     message += "═" * 30 + "\n\n"
 
-    # 1. Signaux du jour
+    # 1. Signaux du jour (chargés depuis le fichier)
     signals = _load_today_signals()
 
-    if signals:
-        message += "🔹 <b>SIGNALS TODAY</b>\n"
-        for s in signals:
-            ticker = s.get('ticker', '?')
-            score = s.get('score', '?')
-            s_type = s.get('type', '?')
-            gap = s.get('gap', 0)
-            message += f"  • {ticker} ({s_type}) — Score: {score} | Gap: {gap:.1f}%\n"
+    # 2. Highlights US et CA séparés
+    highlights_us = _get_market_highlights(MARKET_ETFS_US, "US")
+    highlights_ca = _get_market_highlights(MARKET_ETFS_CA, "CA")
 
-            ctx = _get_signal_context(ticker, s_type)
-            if ctx:
-                message += f"    ↳ {ctx}\n"
+    # --- US Sector Performance ---
+    message += "🇺🇸 <b>US Sector Performance</b>\n"
+    if highlights_us:
+        message += _format_highlights(highlights_us, "🌐") + "\n\n"
     else:
-        message += "🔹 <b>SIGNALS TODAY</b>\n"
-        message += "  No signals generated.\n"
+        message += "  No data available.\n\n"
 
-    # 2. Highlights de la séance
-    highlights = _get_market_highlights()
-    if highlights:
-        message += f"\n🔹 <b>SESSION HIGHLIGHTS</b>\n"
-        message += f"  Market bias: {highlights['bias']}\n"
-        if highlights['top']:
-            name, data = highlights['top']
-            direction = "▲" if data['change'] > 0 else "▼"
-            message += f"  Top sector: {name} ({data['ticker']} {direction} {abs(data['change']):.1f}%)\n"
-        if highlights['bottom']:
-            name, data = highlights['bottom']
-            direction = "▲" if data['change'] > 0 else "▼"
-            message += f"  Worst sector: {name} ({data['ticker']} {direction} {data['change']:.1f}%)\n"
+    # --- CA Sector Performance ---
+    message += "🇨🇦 <b>CA Sector Performance</b>\n"
+    if highlights_ca:
+        message += _format_highlights(highlights_ca, "🌐") + "\n\n"
+    else:
+        message += "  No data available.\n\n"
 
-    # 3. Setup du jour
+    # 3. Meilleur setup STOCK
     if signals:
-        best = max(signals, key=lambda x: x.get('score', 0))
-        ticker = best.get('ticker', '?')
-        score = best.get('score', '?')
-        gap = best.get('gap', 0)
-        vol_ratio = best.get('vol_ratio', 0)
-        message += f"\n🔹 <b>SETUP OF THE DAY</b>\n"
-        message += f"  {ticker} — Score: {score} | Gap: {gap:.1f}% | Vol: x{vol_ratio:.1f}\n"
-        if score >= 6:
-            message += f"  Why it stood out: High score + strong volume combo.\n"
-        elif gap >= 10:
-            message += f"  Why it stood out: Exceptional gap size.\n"
-        else:
-            message += f"  Why it stood out: Best overall setup of the session.\n"
+        stocks = [s for s in signals if s.get('type') == 'STOCK']
+        if stocks:
+            best_stock = max(stocks, key=lambda x: x.get('score', 0))
+            message += _format_setup(best_stock, "STOCK") + "\n\n"
 
-    # 4. Quality Snapshot
-    if signals:
-        avg_score = sum(s.get('score', 0) for s in signals) / len(signals)
-        highest = max(s.get('score', 0) for s in signals)
-        message += f"\n🔹 <b>QUALITY SNAPSHOT</b>\n"
-        message += f"  Signals sent: {len(signals)}\n"
-        message += f"  Avg Quality Score: {avg_score:.1f}/9\n"
-        message += f"  Highest Score: {highest}/9\n"
+        # 4. Meilleur setup ETF
+        etfs = [s for s in signals if s.get('type') == 'ETF']
+        if etfs:
+            best_etf = max(etfs, key=lambda x: x.get('score', 0))
+            message += _format_setup(best_etf, "ETF") + "\n\n"
+    else:
+        message += "🔹 <b>Best STOCK Setup — Today</b>\n"
+        message += "  No stock signals generated.\n\n"
+        message += "🔹 <b>Best ETF Setup — Today</b>\n"
+        message += "  No ETF signals generated.\n\n"
 
     # 5. Citation du jour
-    quote, author = _get_daily_quote(signals, highlights)
-    message += f"\n🔹 <b>QUOTE OF THE DAY</b>\n"
+    quote, author = _get_daily_quote(signals, highlights_us, highlights_ca)
+    message += f"🔹 <b>QUOTE OF THE DAY</b>\n"
     message += f"  \"{quote}\"\n"
     message += f"  — {author}\n"
 
@@ -349,6 +412,6 @@ def send_recap(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PUBLIC_CHANNEL_ID=None):
 if __name__ == "__main__":
     TELEGRAM_TOKEN = os.environ.get("TELEGRAM_PRO_TOKEN")
     TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_PRO_CHAT_ID")
-    PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL_ID", "")  # ← NOUVEAU
+    PUBLIC_CHANNEL_ID = os.environ.get("PUBLIC_CHANNEL_ID", "")
 
     send_recap(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PUBLIC_CHANNEL_ID)
