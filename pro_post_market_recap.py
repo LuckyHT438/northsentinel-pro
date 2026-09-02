@@ -338,7 +338,7 @@ def build_recap_message():
 
     # 5. Citation du jour
     quote, author = _get_daily_quote(signals, highlights_us, highlights_ca)
-    message += f"🔹 <b>QUOTE OF THE DAY</b>\n"
+    message += f"🔹 <b>Quote of the day</b>\n"
     message += f"  \"{quote}\"\n"
     message += f"  — {author}\n"
 
