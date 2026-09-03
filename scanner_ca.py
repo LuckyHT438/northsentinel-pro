@@ -1,6 +1,7 @@
 # ============================================================
 # NORTHSENTINEL CA ONLY — SCANNER INTRADAY CONTINU (BOUCLE)
 # SHORTS + LONGS — 3 SOURCES DE NEWS (uniquement pour le scoring)
+# VERSION 120 TICKERS — 2026-09-03
 # ============================================================
 import requests
 import yfinance as yf
@@ -29,6 +30,7 @@ CONFIG = {
     "price_max_etfs": 9999.00,
     "tickers": {
         "stocks": [
+            # === EXISTANTS (54) ===
             "MFC.TO", "GWO.TO", "POW.TO", "SU.TO", "CNQ.TO",
             "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI-B.TO",
@@ -43,15 +45,36 @@ CONFIG = {
             "GIB-A.TO", "OTEX.TO", "DSG.TO", "CLS.TO",
             "KTN.V",       # remplace KTN.TO
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
-            "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO"
+            "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO",
+
+            # === NOUVEAUX (24) ===
+            # Financiers
+            "TD.TO", "CM.TO", "RY.TO",
+            # Énergie
+            "ENB.TO", "TOU.TO", "ARX.TO", "VET.TO", "PPL.TO", "TRP.TO",
+            # Mines & matériaux
+            "BTO.TO", "FNV.TO", "HBM.TO", "AGI.TO", "NCM.TO",
+            # Technologie
+            "SHOP.TO",
+            # Industrie / conso
+            "WN.TO",
+            # TSX-Venture
+            "ARTG.V", "TOI.V", "AMT.V", "GSVR.V", "QNC.V",
+            "VZLA.V", "MCF.V", "SKE.V", "GPV.V", "LAC.V"
         ],
         "etfs": [
+            # === EXISTANTS (27) ===
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
             "XMA.TO", "XIT.TO", "XST.TO", "XRE.TO", "XUT.TO",
             "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO", "HXS.TO",
             "HXQ.TO", "VFV.TO", "XQQ.TO", "HHL.TO", "TXF.TO",
             "HUTL.TO", "ZDI.TO", "VI.TO", "VRE.TO", "FIE.TO",
-            "ZDC.TO", "ZWA.TO"
+            "ZDC.TO", "ZWA.TO",
+
+            # === NOUVEAUX (15) ===
+            "XIU.TO", "ZCN.TO", "HNU.TO", "HOU.TO", "ZUB.TO",
+            "ZFL.TO", "DLR.TO", "ZWB.TO", "HXT.TO",
+            "XSP.TO", "XEF.TO", "XEC.TO", "ZAG.TO"
         ]
     }
 }
@@ -83,16 +106,22 @@ RSS_FEEDS = [
     "https://business.financialpost.com/feed/"
 ]
 
-# ==================== SESSION HTTP ====================
+# ==================== SESSION HTTP AVEC RETRY RENFORCÉ ====================
 def create_session():
     session = requests.Session()
-    retry = Retry(total=2, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+    retry = Retry(
+        total=3,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
     adapter = HTTPAdapter(max_retries=retry)
     session.mount('https://', adapter)
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0',
         'Accept-Language': 'en-US,en;q=0.9',
     })
+    session.timeout = 15
     return session
 
 HTTP_SESSION = create_session()
@@ -186,13 +215,14 @@ def is_ca_market_closed(check_date):
     adjusted = {_adjust_weekend(d) for d in holidays}
     return check_date in adjusted
 
-# ==================== NEWS SCANNER (3 SOURCES) - conservé pour le scoring ====================
+# ==================== NEWS SCANNER (3 SOURCES) ====================
 def get_news_for_ticker(ticker):
     all_news = []
+    # Nettoyage du ticker pour la recherche
     ticker_clean = ticker.replace('.TO', '').replace('.V', '').upper()
     # 1. Google News
     try:
-        params = {"q": f"{ticker}+stock", "hl": "en-CA", "gl": "CA"}
+        params = {"q": f"{ticker_clean}+stock", "hl": "en-CA", "gl": "CA"}
         r = requests.get("https://news.google.com/rss/search", params=params, timeout=5)
         soup = BeautifulSoup(r.content, 'xml')
         for item in soup.find_all('item')[:5]:
@@ -297,7 +327,7 @@ def get_market_cap_category(ticker):
 
 def get_exchange(info):
     ex = info.get('exchange', '')
-    map_ex = {'TOR': 'TMX', 'TSX': 'TMX', 'TSXV': 'TSXV', 'CNQ': 'CSE'}
+    map_ex = {'TOR': 'TMX', 'TSX': 'TMX', 'TSXV': 'TSXV', 'CNQ': 'CSE', 'V': 'TSXV'}
     return map_ex.get(ex, ex if ex else 'TMX')
 
 def calculate_rsi(prices, period=14):
@@ -318,17 +348,16 @@ def get_confidence_score(score, vol_ratio, gap, cap_category):
         conf += 0.5
     return min(round(conf, 1), 10.0)
 
-# ==================== ANALYSE STOCKS (LONG + SHORT) AVEC LOGS DÉTAILLÉS ====================
+# ==================== ANALYSE STOCKS (LONG + SHORT) ====================
 def analyze_stock(ticker, verbose=True):
     """
     Analyse un titre pour détecter un setup LONG ou SHORT.
     Retourne un dictionnaire avec direction, score, TP/SL, etc. ou None si invalide.
-    Si verbose=True, affiche les détails des critères.
     """
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
-        time.sleep(random.uniform(0.2, 0.4))
+        time.sleep(random.uniform(0.3, 0.6))  # Délai légèrement augmenté pour éviter les rate limits
         price = info.get('regularMarketPrice') or info.get('currentPrice')
         if not price or price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             if verbose:
@@ -356,11 +385,11 @@ def analyze_stock(ticker, verbose=True):
 
         gap = ((price - prev_close) / prev_close) * 100
 
-        # === SCORING (7 critères) avec affichage détaillé ===
+        # === SCORING (7 critères) ===
         score = 0
         criteres = {}
 
-        # 1. Gap (seuil abaissé à 2%)
+        # 1. Gap (seuil 2%)
         if 2 <= gap <= 40:
             direction = "LONG"
             score += 1
@@ -375,7 +404,7 @@ def analyze_stock(ticker, verbose=True):
                 print(f"  ❌ Gap {gap:.2f}% hors [2,40] ou [-40,-2]")
             return None
 
-        # 2. Volume relatif (seuil abaissé à 0.8)
+        # 2. Volume relatif (seuil 0.8)
         volume = info.get('volume', 0)
         avg_vol = info.get('averageVolume', volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
@@ -518,7 +547,7 @@ def analyze_etf(ticker):
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         hist = stock.history(period="1mo")
-        time.sleep(random.uniform(0.2, 0.4))
+        time.sleep(random.uniform(0.3, 0.6))
         if hist.empty or len(hist) < 2:
             return None
         closes = hist['Close']
@@ -677,7 +706,7 @@ def wait_until_target(target_hour, target_minute):
         print(f"⏳ Attente jusqu'à {target.strftime('%H:%M')}... ({diff/60:.1f} min)")
         time.sleep(diff)
 
-# ==================== MAIN CONTINU (SANS NEWS) ====================
+# ==================== MAIN CONTINU ====================
 def main():
     now = datetime.now(MONTREAL_TZ)
     heure = now.hour
@@ -706,7 +735,7 @@ def main():
     # Déterminer la session en fonction de l'heure de lancement
     if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
         session = "morning"
-        start_hour, start_min = 9, 30   # Début des scans prix à 9h30
+        start_hour, start_min = 9, 30
         end_hour, end_min = 11, 30
         print("☀️ Session MATIN détectée.")
     elif 13 <= heure <= 15 and (heure < 15 or minute <= 30):
@@ -739,7 +768,7 @@ def main():
         wait_until_target(start_hour, start_min)
         now = datetime.now(MONTREAL_TZ)
 
-    # Boucle principale (sans news)
+    # Boucle principale
     while True:
         now = datetime.now(MONTREAL_TZ)
         # Vérifier si on a dépassé l'heure de fin
@@ -763,7 +792,7 @@ def main():
         # Scan des prix toutes les 15 minutes (multiples de 15)
         if current_min % 15 == 0:
             print(f"\n📊 Scan de prix à {now.strftime('%H:%M')} (session {session})")
-            # Scans stocks avec logs détaillés
+            # Scans stocks
             stocks_results = []
             for ticker in STOCK_TICKERS:
                 print(f"  - {ticker}:")
@@ -773,7 +802,7 @@ def main():
                     print(f"    ✅ Score {data['score']}/7 | {data['direction']}")
                 else:
                     print("    ❌")
-            # Scans ETFs (logs simplifiés)
+            # Scans ETFs
             etfs_results = []
             for ticker in ETF_TICKERS:
                 print(f"  - {ticker}...", end=" ")
