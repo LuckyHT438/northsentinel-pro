@@ -1,7 +1,7 @@
 # ============================================================
 # NORTHSENTINEL CA ONLY — SCANNER INTRADAY CONTINU (BOUCLE)
 # SHORTS + LONGS — 3 SOURCES DE NEWS (uniquement pour le scoring)
-# VERSION 120 TICKERS — 2026-09-03
+# VERSION 120 TICKERS — NETTOYÉE
 # ============================================================
 import requests
 import yfinance as yf
@@ -35,15 +35,15 @@ CONFIG = {
             "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI-B.TO",
             "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO",
-            "BNS.TO",      # remplace SNC.TO
+            "BNS.TO",
             "ATZ.TO", "GRGD.TO", "SPCX.TO", "CSU.TO", "ATD.TO",
             "MRU.TO", "L.TO", "EMP.A.TO", "CP.TO", "CNR.TO",
             "TFII.TO", "MDA.TO", "BBD-B.TO", "CGO.TO", "QBR-B.TO",
             "IFC.TO", "SLF.TO", "RBA.TO",
-            "NA.TO",       # remplace AND.TO
+            "NA.TO",
             "WELL.TO",
             "GIB-A.TO", "OTEX.TO", "DSG.TO", "CLS.TO",
-            "KTN.V",       # remplace KTN.TO
+            "KTN.V",
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
             "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO",
 
@@ -58,9 +58,17 @@ CONFIG = {
             "SHOP.TO",
             # Industrie / conso
             "WN.TO",
-            # TSX-Venture
-            "ARTG.V", "TOI.V", "AMT.V", "GSVR.V", "QNC.V",
-            "VZLA.V", "MCF.V", "SKE.V", "GPV.V", "LAC.V"
+            # TSX-Venture (uniquement ceux qui ont passé les tests)
+            "ARTG.V", "TOI.V", "QNC.V",
+
+            # === REMPLACEMENTS (7) — alternatives solides sur TSX ===
+            "BTE.TO",    # Baytex Energy Corp. (remplace AMT.V)
+            "MEG.TO",    # MEG Energy Corp. (remplace GSVR.V)
+            "FR.TO",     # First Majestic Silver Corp. (remplace VZLA.V)
+            "SIL.TO",    # SilverCrest Metals Inc. (remplace MCF.V)
+            "EQB.TO",    # Equitable Bank (remplace SKE.V)
+            "TRI.TO",    # Thomson Reuters Corp. (remplace GPV.V)
+            "GIL.TO"     # Gildan Activewear Inc. (remplace LAC.V)
         ],
         "etfs": [
             # === EXISTANTS (27) ===
@@ -357,7 +365,7 @@ def analyze_stock(ticker, verbose=True):
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
-        time.sleep(random.uniform(0.3, 0.6))  # Délai légèrement augmenté pour éviter les rate limits
+        time.sleep(random.uniform(0.3, 0.6))
         price = info.get('regularMarketPrice') or info.get('currentPrice')
         if not price or price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             if verbose:
