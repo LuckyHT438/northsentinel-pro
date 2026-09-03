@@ -32,12 +32,16 @@ CONFIG = {
             "MFC.TO", "GWO.TO", "POW.TO", "SU.TO", "CNQ.TO",
             "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI-B.TO",
-            "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO", "SNC.TO",
+            "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO",
+            "BNS.TO",      # remplace SNC.TO
             "ATZ.TO", "GRGD.TO", "SPCX.TO", "CSU.TO", "ATD.TO",
             "MRU.TO", "L.TO", "EMP.A.TO", "CP.TO", "CNR.TO",
             "TFII.TO", "MDA.TO", "BBD-B.TO", "CGO.TO", "QBR-B.TO",
-            "IFC.TO", "SLF.TO", "RBA.TO", "AND.TO", "WELL.TO",
-            "GIB-A.TO", "OTEX.TO", "DSG.TO", "CLS.TO", "KTN.TO",
+            "IFC.TO", "SLF.TO", "RBA.TO",
+            "NA.TO",       # remplace AND.TO
+            "WELL.TO",
+            "GIB-A.TO", "OTEX.TO", "DSG.TO", "CLS.TO",
+            "KTN.V",       # remplace KTN.TO
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
             "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO"
         ],
@@ -185,7 +189,7 @@ def is_ca_market_closed(check_date):
 # ==================== NEWS SCANNER (3 SOURCES) - conservé pour le scoring ====================
 def get_news_for_ticker(ticker):
     all_news = []
-    ticker_clean = ticker.replace('.TO', '').upper()
+    ticker_clean = ticker.replace('.TO', '').replace('.V', '').upper()
     # 1. Google News
     try:
         params = {"q": f"{ticker}+stock", "hl": "en-CA", "gl": "CA"}
@@ -356,26 +360,26 @@ def analyze_stock(ticker, verbose=True):
         score = 0
         criteres = {}
 
-        # 1. Gap
-        if 3 <= gap <= 40:
+        # 1. Gap (seuil abaissé à 2%)
+        if 2 <= gap <= 40:
             direction = "LONG"
             score += 1
             criteres['gap'] = "✅"
-        elif -40 <= gap <= -3:
+        elif -40 <= gap <= -2:
             direction = "SHORT"
             score += 1
             criteres['gap'] = "✅"
         else:
             criteres['gap'] = "❌"
             if verbose:
-                print(f"  ❌ Gap {gap:.2f}% hors [3,40] ou [-40,-3]")
+                print(f"  ❌ Gap {gap:.2f}% hors [2,40] ou [-40,-2]")
             return None
 
-        # 2. Volume relatif
+        # 2. Volume relatif (seuil abaissé à 0.8)
         volume = info.get('volume', 0)
         avg_vol = info.get('averageVolume', volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
-        if vol_ratio > 1.2:
+        if vol_ratio > 0.8:
             score += 1
             criteres['vol'] = "✅"
         else:
