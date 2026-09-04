@@ -1,7 +1,7 @@
 # ============================================================
 # NORTHSENTINEL CA ONLY — SCANNER INTRADAY CONTINU (BOUCLE)
 # SHORTS + LONGS — 3 SOURCES DE NEWS (uniquement pour le scoring)
-# VERSION 120 TICKERS — NETTOYÉE
+# VERSION 120 TICKERS — PRIX D'ENTRÉE = DERNIER PRIX NÉGOCIÉ
 # ============================================================
 import requests
 import yfinance as yf
@@ -361,17 +361,21 @@ def analyze_stock(ticker, verbose=True):
     """
     Analyse un titre pour détecter un setup LONG ou SHORT.
     Retourne un dictionnaire avec direction, score, TP/SL, etc. ou None si invalide.
+    Le prix d'entrée est le dernier prix négocié (regularMarketPrice).
     """
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         time.sleep(random.uniform(0.3, 0.6))
+
+        # Prix d'entrée = dernier prix négocié (on ne modifie pas par le spread)
         price = info.get('regularMarketPrice') or info.get('currentPrice')
         if not price or price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             if verbose:
                 print(f"  ❌ Prix hors limites ({price})")
             return None
 
+        # Calcul du spread (uniquement pour l'information et le rejet si > MAX_SPREAD_PCT)
         bid = info.get('bid')
         ask = info.get('ask')
         spread_pct = 0.0
@@ -382,8 +386,7 @@ def analyze_stock(ticker, verbose=True):
                 if verbose:
                     print(f"  ❌ Spread {spread_pct:.2f}% > {MAX_SPREAD_PCT}%")
                 return None
-            if spread_pct > 0.3:
-                price = ask
+            # Ne pas modifier le prix d'entrée, on garde le regularMarketPrice
 
         prev_close = info.get('previousClose')
         if not prev_close or prev_close == 0:
@@ -531,7 +534,7 @@ def analyze_stock(ticker, verbose=True):
         return {
             'ticker': ticker,
             'exchange': exchange,
-            'price': price,
+            'price': price,                     # ← dernier prix négocié
             'gap': gap,
             'score': score,
             'vol_ratio': vol_ratio,
@@ -551,16 +554,29 @@ def analyze_stock(ticker, verbose=True):
 
 # ==================== ANALYSE ETF (LONG + SHORT) ====================
 def analyze_etf(ticker):
+    """
+    Analyse un ETF pour détecter un setup LONG ou SHORT.
+    Le prix d'entrée est le dernier prix négocié (regularMarketPrice).
+    """
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         hist = stock.history(period="1mo")
         time.sleep(random.uniform(0.3, 0.6))
-        if hist.empty or len(hist) < 2:
+
+        # Prix d'entrée = dernier prix négocié (regularMarketPrice ou currentPrice)
+        price = info.get('regularMarketPrice') or info.get('currentPrice')
+        if not price:
+            # Fallback sur le dernier prix de l'historique si nécessaire
+            if not hist.empty and len(hist) > 0:
+                price = hist['Close'].iloc[-1]
+            else:
+                return None
+
+        if price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             return None
-        closes = hist['Close']
-        volumes = hist['Volume']
-        price = closes.iloc[-1]
+
+        # Calcul du spread (uniquement pour l'information et le rejet si > MAX_SPREAD_PCT)
         bid = info.get('bid')
         ask = info.get('ask')
         spread_pct = 0.0
@@ -569,16 +585,24 @@ def analyze_etf(ticker):
             spread_pct = ((ask - bid) / mid) * 100
             if spread_pct > MAX_SPREAD_PCT:
                 return None
-            if spread_pct > 0.3:
-                price = ask
+            # Ne pas modifier le prix d'entrée
+
+        if hist.empty or len(hist) < 2:
+            return None
+
+        closes = hist['Close']
+        volumes = hist['Volume']
+
         prev_close = closes.iloc[-2] if len(closes) > 1 else None
         if not prev_close:
             return None
         gap = ((price - prev_close) / prev_close) * 100
+
         volume = info.get('volume', 0)
         avg_vol = volumes.mean() if len(volumes) > 0 else volume
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
         aum = info.get('totalAssets', 0) or info.get('assetsUnderManagement', 0)
+
         score = 0
         if 0.5 <= gap <= 8:
             direction = "LONG"
@@ -588,15 +612,18 @@ def analyze_etf(ticker):
             score += 1
         else:
             return None
+
         if vol_ratio > 0.9:
             score += 1
         if aum > 50_000_000 or aum == 0:
             score += 1
+
         rsi = None
         if len(closes) > 14:
             rsi = calculate_rsi(closes)
             if rsi and 35 <= rsi <= 80:
                 score += 1
+
         if len(closes) >= 20:
             sma20 = closes.rolling(20).mean().iloc[-1]
             if sma20:
@@ -604,22 +631,27 @@ def analyze_etf(ticker):
                     score += 1
                 elif direction == "SHORT" and price < 1.3 * sma20:
                     score += 1
+
         if score < SCORE_MIN_ETFS:
             return None
+
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
+
         if abs(gap) >= 6:
             tp_pct = 1.015 + (score - 3) * 0.005
         elif abs(gap) >= 3:
             tp_pct = 1.01 + (score - 3) * 0.005
         else:
             tp_pct = 1.005 + (score - 3) * 0.005
+
         sl_pct = 0.96
         trail_pct = 3.0
+
         return {
             'ticker': ticker,
             'exchange': exchange,
-            'price': price,
+            'price': price,                     # ← dernier prix négocié
             'gap': gap,
             'score': score,
             'vol_ratio': vol_ratio,
