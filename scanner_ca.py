@@ -4,6 +4,7 @@
 # VERSION 120 TICKERS — PRIX D'ENTRÉE = DERNIER PRIX NÉGOCIÉ
 # AVEC GESTION DES RISQUES DYNAMIQUE (spread, volume, cap, gap, institutions)
 # R/R ≥ 2:1 — SCORE INSTITUTIONNEL DÉTAILLÉ DANS LES LOGS
+# GESTION COMPLÈTE DES JOURS FÉRIÉS ET EARLY CLOSES
 # ============================================================
 import requests
 import yfinance as yf
@@ -158,10 +159,12 @@ def _build_ca_holidays(year):
     ca.add(date(year, 7, 1))
     ca.add(date(year, 12, 25))
     ca.add(date(year, 12, 26))
+    # Family Day (deuxième lundi de février)
     fam = date(year, 2, 1)
     while fam.weekday() != 0:
         fam = date(year, 2, fam.day + 1)
     ca.add(date(year, 2, fam.day + 14))
+    # Good Friday
     a = year % 19
     b = year // 100
     c = year % 100
@@ -178,18 +181,22 @@ def _build_ca_holidays(year):
     day = ((h + l - 7 * m + 114) % 31) + 1
     easter = date(year, month, day)
     ca.add(easter - timedelta(days=2))
+    # Victoria Day (lundi précédant le 25 mai)
     vic = date(year, 5, 24)
     while vic.weekday() != 0:
         vic = date(year, 5, vic.day - 1)
     ca.add(vic)
+    # Civic Holiday (premier lundi d'août)
     civ = date(year, 8, 1)
     while civ.weekday() != 0:
         civ = date(year, 8, civ.day + 1)
     ca.add(civ)
+    # Labour Day (premier lundi de septembre)
     lab = date(year, 9, 1)
     while lab.weekday() != 0:
         lab = date(year, 9, lab.day + 1)
     ca.add(lab)
+    # Canadian Thanksgiving (deuxième lundi d'octobre)
     thanks = date(year, 10, 1)
     while thanks.weekday() != 0:
         thanks = date(year, 10, thanks.day + 1)
@@ -204,6 +211,30 @@ def is_ca_market_closed(check_date):
     holidays = _build_ca_holidays(check_date.year)
     adjusted = {_adjust_weekend(d) for d in holidays}
     return check_date in adjusted
+
+# ==================== FERMETURES ANTICIPÉES (EARLY CLOSE) ====================
+def _build_early_close_dates(year):
+    from datetime import date
+    early_dates = {}
+    # 24 décembre
+    early_dates[date(year, 12, 24)] = 13
+    # 31 décembre
+    early_dates[date(year, 12, 31)] = 13
+    # Optionnel : vendredi avant Thanksgiving (US) si le TSX ferme plus tôt, mais c'est rare
+    # On peut l'ajouter si nécessaire, mais ce n'est pas officiel
+    return early_dates
+
+def is_early_close(check_date):
+    if isinstance(check_date, datetime):
+        check_date = check_date.date()
+    early_dates = _build_early_close_dates(check_date.year)
+    return check_date in early_dates
+
+def get_early_close_hour(check_date):
+    if isinstance(check_date, datetime):
+        check_date = check_date.date()
+    early_dates = _build_early_close_dates(check_date.year)
+    return early_dates.get(check_date, None)
 
 # ==================== NEWS ====================
 def get_news_for_ticker(ticker):
@@ -926,6 +957,7 @@ def main():
     heure = now.hour
     minute = now.minute
 
+    # Vérifier si le marché est fermé (week-end ou férié)
     if is_ca_market_closed(now):
         print("🏖️ Marché CA fermé – Arrêt.")
         if IS_MANUAL_RUN:
@@ -945,6 +977,21 @@ def main():
             send_telegram(msg)
         return
 
+    # Vérifier les early closes
+    early_close = is_early_close(now)
+    early_hour = get_early_close_hour(now) if early_close else None
+    if early_close:
+        print(f"⚠️ Fermeture anticipée détectée – Marché ferme à {early_hour}:00 ET.")
+        # Envoyer un message Telegram d'avertissement (pour les runs manuels ou automatiques)
+        if TELEGRAM_TOKEN:
+            msg_early = (
+                "⚠️ <b>Early Close Today</b>\n"
+                f"Market closes at {early_hour}:00 PM ET.\n"
+                "Afternoon session will end at that time."
+            )
+            send_telegram(msg_early)
+
+    # Déterminer la session
     if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
         session = "morning"
         start_hour, start_min = 9, 30
@@ -953,8 +1000,14 @@ def main():
     elif 13 <= heure <= 15 and (heure < 15 or minute <= 30):
         session = "afternoon"
         start_hour, start_min = 13, 0
-        end_hour, end_min = 15, 30
-        print("🌙 Session APRÈS-MIDI détectée.")
+        # Ajuster l'heure de fin en cas d'early close
+        if early_close and early_hour is not None:
+            end_hour = early_hour
+            end_min = 0
+            print(f"🌙 Session APRÈS-MIDI détectée (EARLY CLOSE – fin à {end_hour:02d}:{end_min:02d} ET).")
+        else:
+            end_hour, end_min = 15, 30
+            print("🌙 Session APRÈS-MIDI détectée.")
     else:
         print("⏰ Lancement hors des plages horaires (9h-11h30 ou 13h-15h30) – Arrêt.")
         if IS_MANUAL_RUN:
@@ -973,14 +1026,17 @@ def main():
             send_telegram(msg)
         return
 
+    # Attendre le début de la session si nécessaire
     now = datetime.now(MONTREAL_TZ)
     if now.hour < start_hour or (now.hour == start_hour and now.minute < start_min):
         print(f"⏳ Attente du début de session à {start_hour:02d}:{start_min:02d}...")
         wait_until_target(start_hour, start_min)
         now = datetime.now(MONTREAL_TZ)
 
+    # Boucle principale
     while True:
         now = datetime.now(MONTREAL_TZ)
+        # Vérifier si on a dépassé l'heure de fin
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
             session_label = "Morning" if session == "morning" else "Afternoon"
