@@ -3,7 +3,7 @@
 # SHORTS + LONGS — 3 SOURCES DE NEWS (uniquement pour le scoring)
 # VERSION 120 TICKERS — PRIX D'ENTRÉE = DERNIER PRIX NÉGOCIÉ
 # AVEC GESTION DES RISQUES DYNAMIQUE (spread, volume, cap, gap, institutions)
-# R/R ≥ 2:1 — SCORE INSTITUTIONNEL INTÉGRÉ
+# R/R ≥ 2:1 — SCORE INSTITUTIONNEL DÉTAILLÉ DANS LES LOGS
 # ============================================================
 import requests
 import yfinance as yf
@@ -269,13 +269,14 @@ def analyze_sentiment(title):
         score -= 1
     return score
 
-# ==================== SCORE INSTITUTIONNEL ====================
+# ==================== SCORE INSTITUTIONNEL (AVEC DÉTAILS) ====================
 def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     """
     Calcule un score d'intérêt institutionnel (0-10) basé sur des données disponibles pour le marché canadien.
-    Utilise heldPercentInstitutions, shortRatio, volume, SMA50, et le gap/direction.
+    Retourne (score, details) où details est un dictionnaire contenant les sous-composantes.
     """
     score = 0
+    details = {}
     held = info.get('heldPercentInstitutions', 0)
     if held is None:
         held = 0
@@ -284,28 +285,51 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
         short_ratio = 0
     sma50 = info.get('fiftyDayAverage', 0)
 
+    details['held'] = held
+    details['short_ratio'] = short_ratio
+    details['vol_ratio'] = vol_ratio
+    details['sma50'] = sma50
+    details['price'] = price
+    details['gap'] = gap
+    details['direction'] = direction
+
     # 1. Taux de détention institutionnelle élevé
     if held >= 0.6:
         score += 2
+        details['held_bonus'] = 2
     elif held >= 0.4:
         score += 1
+        details['held_bonus'] = 1
+    else:
+        details['held_bonus'] = 0
 
     # 2. Short squeeze potentiel : short ratio > 3 + gap haussier > 3% + direction LONG
     if short_ratio > 3 and direction == "LONG" and gap > 3:
         score += 2
+        details['short_squeeze_bonus'] = 2
+    else:
+        details['short_squeeze_bonus'] = 0
 
     # 3. Volume anormal + cassure SMA50 (institutions actives)
     if vol_ratio > 2 and sma50 and price > sma50:
         score += 2
+        details['volume_sma_bonus'] = 2
     elif vol_ratio > 1.5 and sma50 and price > sma50:
         score += 1
+        details['volume_sma_bonus'] = 1
+    else:
+        details['volume_sma_bonus'] = 0
 
     # 4. Short ratio très élevé seul (intérêt baissier institutionnel)
     if short_ratio > 4 and direction == "SHORT":
         score += 1
+        details['short_high_bonus'] = 1
+    else:
+        details['short_high_bonus'] = 0
 
-    # Normalisation sur 10 (on plafonne)
-    return min(score, 10)
+    score = min(score, 10)
+    details['total'] = score
+    return score, details
 
 # ==================== FONCTIONS D'ANALYSE ====================
 def get_market_cap_category(ticker):
@@ -551,8 +575,38 @@ def analyze_stock(ticker, verbose=True):
                 print(f"  ❌ Score {score} < {SCORE_MIN_STOCKS}")
             return None
 
-        # === CALCUL DU SCORE INSTITUTIONNEL ===
-        inst_score = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+        # === CALCUL DU SCORE INSTITUTIONNEL AVEC DÉTAILS ===
+        inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+
+        # Affichage des détails institutionnels si verbose
+        if verbose:
+            # Label du score
+            if inst_score >= 7:
+                inst_label = "High"
+            elif inst_score >= 4:
+                inst_label = "Moderate"
+            else:
+                inst_label = "Low"
+            print(f"     🏛️ Inst. Interest: {inst_score}/10 ({inst_label})")
+            # heldPercentInstitutions
+            held_bonus = inst_details['held_bonus']
+            if held_bonus > 0:
+                print(f"       - heldPercentInstitutions: {inst_details['held']*100:.1f}% → +{held_bonus}")
+            # Short squeeze bonus
+            if inst_details['short_squeeze_bonus'] > 0:
+                print(f"       - Short Ratio: {inst_details['short_ratio']:.1f} → bonus short squeeze +{inst_details['short_squeeze_bonus']}")
+            # Volume + SMA50 bonus
+            vol_sma_bonus = inst_details['volume_sma_bonus']
+            if vol_sma_bonus > 0:
+                if inst_details['vol_ratio'] > 2:
+                    print(f"       - Vol ratio: {inst_details['vol_ratio']:.2f} (>2) → +{vol_sma_bonus}")
+                else:
+                    print(f"       - Vol ratio: {inst_details['vol_ratio']:.2f} (>1.5) → +{vol_sma_bonus}")
+                print(f"       - Prix > SMA50 ({inst_details['price']:.2f} > {inst_details['sma50']:.2f}) → +{vol_sma_bonus}")
+            # Short high bonus
+            if inst_details['short_high_bonus'] > 0:
+                print(f"       - Short Ratio: {inst_details['short_ratio']:.1f} (>4) → +1")
+            print(f"       - Total: {inst_score}/10")
 
         # === CALCUL DES TP/SL AVEC FACTEURS DYNAMIQUES ===
         cap_category = get_market_cap_category(ticker)
@@ -620,7 +674,7 @@ def analyze_stock(ticker, verbose=True):
             'trail_pct': round(trail, 2),
             'tp_pct': round(tp_final, 2),
             'sl_pct': round(sl_final, 2),
-            'inst_interest': inst_score  # <-- ajout du score institutionnel
+            'inst_interest': inst_score
         }
 
     except Exception as e:
@@ -707,9 +761,12 @@ def analyze_etf(ticker):
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
 
-        # === CALCUL DU SCORE INSTITUTIONNEL (ETF) ===
-        # Pour les ETF, on utilise les mêmes données si disponibles, sinon on met 0
-        inst_score = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+        # === CALCUL DU SCORE INSTITUTIONNEL (ETF) AVEC DÉTAILS ===
+        inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+
+        # Affichage des détails institutionnels (si on voulait les logs, mais pour les ETF on les laisse pour la cohérence)
+        # Ici on ne les affiche pas pour éviter de surcharger les logs des ETF, mais on peut les ajouter si nécessaire.
+        # Pour l'instant, on garde l'affichage minimal pour les ETF.
 
         # === CALCUL DES TP/SL AVEC FACTEURS DYNAMIQUES ===
         if abs(gap) >= 6:
@@ -761,7 +818,7 @@ def analyze_etf(ticker):
             'trail_pct': round(trail, 2),
             'tp_pct': round(tp_final, 2),
             'sl_pct': round(sl_final, 2),
-            'inst_interest': inst_score  # <-- ajout du score institutionnel
+            'inst_interest': inst_score
         }
     except Exception:
         return None
@@ -849,8 +906,6 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral (CA)"):
     msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} (+{gain_pct}%)\n"
     msg += f"   🛑 STOP LOSS: ${format_price(sl)} (-{loss_pct}%)\n"
     msg += f"   🔄 TRAILING: ${format_price(trail_price)} → {data['trail_pct']}%\n"
-    # On ne met pas le R/R dans ce format, on le garde en option si besoin
-    # msg += f"   📊 R/R: {gain_pct:.1f} / {loss_pct:.1f} = {gain_pct/loss_pct:.1f}:1\n"
 
     return msg
 
