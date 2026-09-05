@@ -2,6 +2,8 @@
 # NORTHSENTINEL CA ONLY — SCANNER INTRADAY CONTINU (BOUCLE)
 # SHORTS + LONGS — 3 SOURCES DE NEWS (uniquement pour le scoring)
 # VERSION 120 TICKERS — PRIX D'ENTRÉE = DERNIER PRIX NÉGOCIÉ
+# AVEC GESTION DES RISQUES DYNAMIQUE (spread, volume, cap, gap, institutions)
+# R/R ≥ 2:1 — SCORE INSTITUTIONNEL INTÉGRÉ
 # ============================================================
 import requests
 import yfinance as yf
@@ -58,17 +60,11 @@ CONFIG = {
             "SHOP.TO",
             # Industrie / conso
             "WN.TO",
-            # TSX-Venture (uniquement ceux qui ont passé les tests)
+            # TSX-Venture
             "ARTG.V", "TOI.V", "QNC.V",
 
-            # === REMPLACEMENTS (7) — alternatives solides sur TSX ===
-            "BTE.TO",    # Baytex Energy Corp. (remplace AMT.V)
-            "MEG.TO",    # MEG Energy Corp. (remplace GSVR.V)
-            "FR.TO",     # First Majestic Silver Corp. (remplace VZLA.V)
-            "SIL.TO",    # SilverCrest Metals Inc. (remplace MCF.V)
-            "EQB.TO",    # Equitable Bank (remplace SKE.V)
-            "TRI.TO",    # Thomson Reuters Corp. (remplace GPV.V)
-            "GIL.TO"     # Gildan Activewear Inc. (remplace LAC.V)
+            # === REMPLACEMENTS (7) ===
+            "BTE.TO", "MEG.TO", "FR.TO", "SIL.TO", "EQB.TO", "TRI.TO", "GIL.TO"
         ],
         "etfs": [
             # === EXISTANTS (27) ===
@@ -92,7 +88,6 @@ MONTREAL_TZ = pytz.timezone('America/Toronto')
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
 
-# Détection du mode manuel (GitHub Actions OU terminal interactif)
 GITHUB_EVENT = os.environ.get("GITHUB_EVENT_NAME", "")
 IS_MANUAL_RUN = (GITHUB_EVENT == "workflow_dispatch") or sys.stdin.isatty()
 
@@ -114,15 +109,10 @@ RSS_FEEDS = [
     "https://business.financialpost.com/feed/"
 ]
 
-# ==================== SESSION HTTP AVEC RETRY RENFORCÉ ====================
+# ==================== SESSION HTTP ====================
 def create_session():
     session = requests.Session()
-    retry = Retry(
-        total=3,
-        backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]
-    )
+    retry = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
     adapter = HTTPAdapter(max_retries=retry)
     session.mount('https://', adapter)
     session.headers.update({
@@ -136,7 +126,6 @@ HTTP_SESSION = create_session()
 
 # ==================== FONCTIONS TELEGRAM ====================
 def send_telegram(message):
-    """Envoie un message Telegram si les tokens sont configurés."""
     if not TELEGRAM_TOKEN:
         print("⚠️ Token Telegram manquant")
         return False
@@ -154,7 +143,7 @@ def send_telegram(message):
         print(f"❌ Exception Telegram: {e}")
         return False
 
-# ==================== JOURS FÉRIÉS CANADA ====================
+# ==================== JOURS FÉRIÉS ====================
 def _adjust_weekend(d):
     if d.weekday() == 5:
         return d - timedelta(days=1)
@@ -169,12 +158,10 @@ def _build_ca_holidays(year):
     ca.add(date(year, 7, 1))
     ca.add(date(year, 12, 25))
     ca.add(date(year, 12, 26))
-    # Family Day
     fam = date(year, 2, 1)
     while fam.weekday() != 0:
         fam = date(year, 2, fam.day + 1)
     ca.add(date(year, 2, fam.day + 14))
-    # Good Friday
     a = year % 19
     b = year // 100
     c = year % 100
@@ -191,22 +178,18 @@ def _build_ca_holidays(year):
     day = ((h + l - 7 * m + 114) % 31) + 1
     easter = date(year, month, day)
     ca.add(easter - timedelta(days=2))
-    # Victoria Day
     vic = date(year, 5, 24)
     while vic.weekday() != 0:
         vic = date(year, 5, vic.day - 1)
     ca.add(vic)
-    # Civic Holiday
     civ = date(year, 8, 1)
     while civ.weekday() != 0:
         civ = date(year, 8, civ.day + 1)
     ca.add(civ)
-    # Labour Day
     lab = date(year, 9, 1)
     while lab.weekday() != 0:
         lab = date(year, 9, lab.day + 1)
     ca.add(lab)
-    # Canadian Thanksgiving
     thanks = date(year, 10, 1)
     while thanks.weekday() != 0:
         thanks = date(year, 10, thanks.day + 1)
@@ -214,7 +197,6 @@ def _build_ca_holidays(year):
     return ca
 
 def is_ca_market_closed(check_date):
-    """Vérifie si le marché canadien est fermé (week-end ou jour férié)."""
     if isinstance(check_date, datetime):
         check_date = check_date.date()
     if check_date.weekday() >= 5:
@@ -223,12 +205,10 @@ def is_ca_market_closed(check_date):
     adjusted = {_adjust_weekend(d) for d in holidays}
     return check_date in adjusted
 
-# ==================== NEWS SCANNER (3 SOURCES) ====================
+# ==================== NEWS ====================
 def get_news_for_ticker(ticker):
     all_news = []
-    # Nettoyage du ticker pour la recherche
     ticker_clean = ticker.replace('.TO', '').replace('.V', '').upper()
-    # 1. Google News
     try:
         params = {"q": f"{ticker_clean}+stock", "hl": "en-CA", "gl": "CA"}
         r = requests.get("https://news.google.com/rss/search", params=params, timeout=5)
@@ -245,7 +225,6 @@ def get_news_for_ticker(ticker):
                 pass
     except:
         pass
-    # 2. CBC + Financial Post
     for feed_url in RSS_FEEDS:
         try:
             r = requests.get(feed_url, timeout=5)
@@ -275,33 +254,10 @@ def get_news_for_ticker(ticker):
 
 def analyze_sentiment(title):
     text = title.lower()
-    bullish_strong = [
-        'fda approval', 'partnership', 'deal', 'acquisition', 'buyout', 'merger',
-        'earnings beat', 'upgraded', 'breakthrough', 'contract awarded',
-        'drill results', 'high-grade', 'discovery', 'resource estimate',
-        'feasibility study', 'permit granted', 'commercial production',
-        'joint venture', 'bought deal', 'flow-through', 'positive', 'upgrade',
-        'record revenue', 'guidance raised'
-    ]
-    bullish = [
-        'growth', 'revenue', 'profit', 'gain', 'surge', 'rally', 'momentum',
-        'expansion', 'launch', 'agreement', 'assay', 'buy rating', 'outperform',
-        'overweight', 'new contract', 'granted', 'approved', 'commenced',
-        'completed', 'successful'
-    ]
-    bearish_strong = [
-        'dilution', 'offering', 'bankruptcy', 'lawsuit', 'sec investigation',
-        'delisting', 'fda rejection', 'clinical failure', 'downgraded',
-        'private placement', 'unit offering', 'permit denied', 'cease trade',
-        'suspension', 'default', 'going concern', 'termination',
-        'insider selling', 'ceo departure', 'investigation', 'guidance lowered',
-        'missed estimates'
-    ]
-    bearish = [
-        'loss', 'decline', 'drop', 'fall', 'warning', 'concern', 'risk',
-        'delay', 'delayed', 'suspended', 'halted', 'reduced', 'lowered',
-        'restructuring', 'layoff', 'impairment', 'write-down', 'debt'
-    ]
+    bullish_strong = ['fda approval', 'partnership', 'deal', 'acquisition', 'buyout', 'merger', 'earnings beat', 'upgraded', 'breakthrough', 'contract awarded', 'drill results', 'high-grade', 'discovery', 'resource estimate', 'feasibility study', 'permit granted', 'commercial production', 'joint venture', 'bought deal', 'flow-through', 'positive', 'upgrade', 'record revenue', 'guidance raised']
+    bullish = ['growth', 'revenue', 'profit', 'gain', 'surge', 'rally', 'momentum', 'expansion', 'launch', 'agreement', 'assay', 'buy rating', 'outperform', 'overweight', 'new contract', 'granted', 'approved', 'commenced', 'completed', 'successful']
+    bearish_strong = ['dilution', 'offering', 'bankruptcy', 'lawsuit', 'sec investigation', 'delisting', 'fda rejection', 'clinical failure', 'downgraded', 'private placement', 'unit offering', 'permit denied', 'cease trade', 'suspension', 'default', 'going concern', 'termination', 'insider selling', 'ceo departure', 'investigation', 'guidance lowered', 'missed estimates']
+    bearish = ['loss', 'decline', 'drop', 'fall', 'warning', 'concern', 'risk', 'delay', 'delayed', 'suspended', 'halted', 'reduced', 'lowered', 'restructuring', 'layoff', 'impairment', 'write-down', 'debt']
     score = 0
     if any(w in text for w in bullish_strong):
         score += 2
@@ -313,7 +269,45 @@ def analyze_sentiment(title):
         score -= 1
     return score
 
-# ==================== FONCTIONS D'ANALYSE (STOCKS & ETF) ====================
+# ==================== SCORE INSTITUTIONNEL ====================
+def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
+    """
+    Calcule un score d'intérêt institutionnel (0-10) basé sur des données disponibles pour le marché canadien.
+    Utilise heldPercentInstitutions, shortRatio, volume, SMA50, et le gap/direction.
+    """
+    score = 0
+    held = info.get('heldPercentInstitutions', 0)
+    if held is None:
+        held = 0
+    short_ratio = info.get('shortRatio', 0)
+    if short_ratio is None:
+        short_ratio = 0
+    sma50 = info.get('fiftyDayAverage', 0)
+
+    # 1. Taux de détention institutionnelle élevé
+    if held >= 0.6:
+        score += 2
+    elif held >= 0.4:
+        score += 1
+
+    # 2. Short squeeze potentiel : short ratio > 3 + gap haussier > 3% + direction LONG
+    if short_ratio > 3 and direction == "LONG" and gap > 3:
+        score += 2
+
+    # 3. Volume anormal + cassure SMA50 (institutions actives)
+    if vol_ratio > 2 and sma50 and price > sma50:
+        score += 2
+    elif vol_ratio > 1.5 and sma50 and price > sma50:
+        score += 1
+
+    # 4. Short ratio très élevé seul (intérêt baissier institutionnel)
+    if short_ratio > 4 and direction == "SHORT":
+        score += 1
+
+    # Normalisation sur 10 (on plafonne)
+    return min(score, 10)
+
+# ==================== FONCTIONS D'ANALYSE ====================
 def get_market_cap_category(ticker):
     try:
         info = yf.Ticker(ticker).info
@@ -356,26 +350,84 @@ def get_confidence_score(score, vol_ratio, gap, cap_category):
         conf += 0.5
     return min(round(conf, 1), 10.0)
 
-# ==================== ANALYSE STOCKS (LONG + SHORT) ====================
+# ==================== GESTION DES RISQUES DYNAMIQUE AVEC INSTITUTIONS ====================
+def adjust_risk_with_factors(base_tp_pct, base_sl_pct, spread_pct, vol_ratio, cap_category, gap, held_pct):
+    """
+    Ajuste le TP, le SL et le Trailing en fonction des facteurs de marché.
+    Retourne (tp_pct, sl_pct, trail_adj) où trail_adj est un ajustement en pourcentage à ajouter au trailing.
+    """
+    tp_pct = base_tp_pct
+    sl_pct = base_sl_pct
+    trail_adj = 0.0
+
+    # 1. Spread
+    if spread_pct > 0.5:
+        sl_pct += 0.2
+
+    # 2. Volume relatif
+    if vol_ratio > 2.0:
+        sl_pct -= 0.3
+        tp_pct += 0.5
+    elif vol_ratio < 0.5:
+        sl_pct += 0.3
+
+    # 3. Capitalisation
+    if cap_category in ["Micro Cap", "Small Cap"]:
+        sl_pct += 0.5
+        tp_pct += 1.0
+    elif cap_category in ["Large Cap", "Mega Cap"]:
+        sl_pct -= 0.2
+
+    # 4. Gap
+    if abs(gap) > 10:
+        tp_pct += 0.5
+
+    # 5. Taux de détention institutionnelle
+    if held_pct >= 0.6:
+        sl_pct -= 0.2      # plus serré
+        tp_pct -= 0.5      # moins ambitieux
+        trail_adj -= 0.5   # trailing plus serré
+    elif held_pct <= 0.2:
+        sl_pct += 0.3      # plus large
+        tp_pct += 1.0      # plus ambitieux
+        trail_adj += 1.0   # trailing plus large
+
+    # Bornes de sécurité
+    sl_pct = max(0.5, min(sl_pct, 3.0))
+    tp_pct = max(0.5, min(tp_pct, 8.0))
+
+    return round(tp_pct, 2), round(sl_pct, 2), round(trail_adj, 2)
+
+def apply_risk_mandate(tp_pct, sl_pct, min_ratio=2.0):
+    """
+    Garantit un ratio R/R ≥ min_ratio (ex: 2:1).
+    Retourne (tp_pct, sl_pct) ajustés.
+    """
+    required_tp = sl_pct * min_ratio
+    if tp_pct < required_tp:
+        tp_pct = round(required_tp, 2)
+
+    if sl_pct < 0.5:
+        sl_pct = 0.5
+
+    tp_pct = min(tp_pct, 8.0)
+    sl_pct = min(sl_pct, 3.0)
+
+    return round(tp_pct, 2), round(sl_pct, 2)
+
+# ==================== ANALYSE STOCKS ====================
 def analyze_stock(ticker, verbose=True):
-    """
-    Analyse un titre pour détecter un setup LONG ou SHORT.
-    Retourne un dictionnaire avec direction, score, TP/SL, etc. ou None si invalide.
-    Le prix d'entrée est le dernier prix négocié (regularMarketPrice).
-    """
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         time.sleep(random.uniform(0.3, 0.6))
 
-        # Prix d'entrée = dernier prix négocié (on ne modifie pas par le spread)
         price = info.get('regularMarketPrice') or info.get('currentPrice')
         if not price or price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             if verbose:
                 print(f"  ❌ Prix hors limites ({price})")
             return None
 
-        # Calcul du spread (uniquement pour l'information et le rejet si > MAX_SPREAD_PCT)
         bid = info.get('bid')
         ask = info.get('ask')
         spread_pct = 0.0
@@ -386,7 +438,6 @@ def analyze_stock(ticker, verbose=True):
                 if verbose:
                     print(f"  ❌ Spread {spread_pct:.2f}% > {MAX_SPREAD_PCT}%")
                 return None
-            # Ne pas modifier le prix d'entrée, on garde le regularMarketPrice
 
         prev_close = info.get('previousClose')
         if not prev_close or prev_close == 0:
@@ -396,11 +447,10 @@ def analyze_stock(ticker, verbose=True):
 
         gap = ((price - prev_close) / prev_close) * 100
 
-        # === SCORING (7 critères) ===
+        # === SCORING ===
         score = 0
         criteres = {}
 
-        # 1. Gap (seuil 2%)
         if 2 <= gap <= 40:
             direction = "LONG"
             score += 1
@@ -415,7 +465,6 @@ def analyze_stock(ticker, verbose=True):
                 print(f"  ❌ Gap {gap:.2f}% hors [2,40] ou [-40,-2]")
             return None
 
-        # 2. Volume relatif (seuil 0.8)
         volume = info.get('volume', 0)
         avg_vol = info.get('averageVolume', volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
@@ -425,7 +474,6 @@ def analyze_stock(ticker, verbose=True):
         else:
             criteres['vol'] = "❌"
 
-        # 3. Float
         float_shares = info.get('floatShares')
         if float_shares is not None and float_shares < 100_000_000:
             score += 1
@@ -436,7 +484,6 @@ def analyze_stock(ticker, verbose=True):
         else:
             criteres['float'] = "❌"
 
-        # 4. Beta
         beta = info.get('beta')
         if beta is not None and beta > 0.8:
             score += 1
@@ -447,7 +494,6 @@ def analyze_stock(ticker, verbose=True):
         else:
             criteres['beta'] = "❌"
 
-        # 5. Short Ratio
         short_ratio = info.get('shortRatio')
         if short_ratio is not None and short_ratio > 1.5:
             score += 1
@@ -458,7 +504,6 @@ def analyze_stock(ticker, verbose=True):
         else:
             criteres['short'] = "❌"
 
-        # 6. SMA50
         sma50 = info.get('fiftyDayAverage')
         if sma50:
             if direction == "LONG" and price > sma50:
@@ -472,7 +517,6 @@ def analyze_stock(ticker, verbose=True):
         else:
             criteres['sma50'] = "❌ (N/A)"
 
-        # 7. News sentiment
         news = get_news_for_ticker(ticker)
         if news:
             for n in news[:3]:
@@ -507,23 +551,49 @@ def analyze_stock(ticker, verbose=True):
                 print(f"  ❌ Score {score} < {SCORE_MIN_STOCKS}")
             return None
 
-        # ===== CALCUL DES TP/SL/TRAILING =====
+        # === CALCUL DU SCORE INSTITUTIONNEL ===
+        inst_score = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+
+        # === CALCUL DES TP/SL AVEC FACTEURS DYNAMIQUES ===
         cap_category = get_market_cap_category(ticker)
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, cap_category)
 
+        # Récupération du taux d'institutions
+        held_pct = info.get('heldPercentInstitutions', 0.5)
+        if held_pct is None:
+            held_pct = 0.5
+
+        # TP et SL bruts (basés sur score et gap)
         if abs(gap) >= 20:
-            tp_pct = 1.02 + (score - 4) * 0.006
+            tp_brut = 2.0 + (score - 4) * 0.6
         elif abs(gap) >= 10:
-            tp_pct = 1.015 + (score - 4) * 0.004
+            tp_brut = 1.5 + (score - 4) * 0.4
         else:
-            tp_pct = 1.005 + (score - 4) * 0.002
+            tp_brut = 0.5 + (score - 4) * 0.2
 
         if score >= 6:
-            sl_pct = 0.96
+            sl_brut = 2.0
         else:
-            sl_pct = 0.95
+            sl_brut = 2.5
 
+        # Ajustement dynamique (incluant institutions)
+        tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(
+            tp_brut, sl_brut, spread_pct, vol_ratio, cap_category, gap, held_pct
+        )
+
+        # Application du mandat R/R ≥ 2:1
+        tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, min_ratio=2.0)
+
+        # Conversion en multiplicateurs
+        if direction == "LONG":
+            tp_mult = 1 + tp_final / 100
+            sl_mult = 1 - sl_final / 100
+        else:
+            tp_mult = 1 - tp_final / 100
+            sl_mult = 1 + sl_final / 100
+
+        # Trailing stop (ajusté)
         if score >= 8:
             trail = 2.5
         elif score >= 6:
@@ -531,10 +601,13 @@ def analyze_stock(ticker, verbose=True):
         else:
             trail = 4.0
 
+        trail += trail_adj  # application de l'ajustement
+        trail = max(1.0, min(trail, 6.0))  # bornes de sécurité
+
         return {
             'ticker': ticker,
             'exchange': exchange,
-            'price': price,                     # ← dernier prix négocié
+            'price': price,
             'gap': gap,
             'score': score,
             'vol_ratio': vol_ratio,
@@ -542,9 +615,12 @@ def analyze_stock(ticker, verbose=True):
             'confidence': confidence,
             'spread_pct': spread_pct,
             'direction': direction,
-            'tp_mult': round(tp_pct, 3),
-            'sl_mult': round(sl_pct, 3),
-            'trail_pct': round(trail, 2)
+            'tp_mult': round(tp_mult, 3),
+            'sl_mult': round(sl_mult, 3),
+            'trail_pct': round(trail, 2),
+            'tp_pct': round(tp_final, 2),
+            'sl_pct': round(sl_final, 2),
+            'inst_interest': inst_score  # <-- ajout du score institutionnel
         }
 
     except Exception as e:
@@ -552,22 +628,16 @@ def analyze_stock(ticker, verbose=True):
             print(f"  ❌ Exception: {e}")
         return None
 
-# ==================== ANALYSE ETF (LONG + SHORT) ====================
+# ==================== ANALYSE ETF ====================
 def analyze_etf(ticker):
-    """
-    Analyse un ETF pour détecter un setup LONG ou SHORT.
-    Le prix d'entrée est le dernier prix négocié (regularMarketPrice).
-    """
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         hist = stock.history(period="1mo")
         time.sleep(random.uniform(0.3, 0.6))
 
-        # Prix d'entrée = dernier prix négocié (regularMarketPrice ou currentPrice)
         price = info.get('regularMarketPrice') or info.get('currentPrice')
         if not price:
-            # Fallback sur le dernier prix de l'historique si nécessaire
             if not hist.empty and len(hist) > 0:
                 price = hist['Close'].iloc[-1]
             else:
@@ -576,7 +646,6 @@ def analyze_etf(ticker):
         if price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             return None
 
-        # Calcul du spread (uniquement pour l'information et le rejet si > MAX_SPREAD_PCT)
         bid = info.get('bid')
         ask = info.get('ask')
         spread_pct = 0.0
@@ -585,7 +654,6 @@ def analyze_etf(ticker):
             spread_pct = ((ask - bid) / mid) * 100
             if spread_pct > MAX_SPREAD_PCT:
                 return None
-            # Ne pas modifier le prix d'entrée
 
         if hist.empty or len(hist) < 2:
             return None
@@ -603,6 +671,7 @@ def analyze_etf(ticker):
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
         aum = info.get('totalAssets', 0) or info.get('assetsUnderManagement', 0)
 
+        # === SCORING ETF ===
         score = 0
         if 0.5 <= gap <= 8:
             direction = "LONG"
@@ -638,20 +707,48 @@ def analyze_etf(ticker):
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
 
-        if abs(gap) >= 6:
-            tp_pct = 1.015 + (score - 3) * 0.005
-        elif abs(gap) >= 3:
-            tp_pct = 1.01 + (score - 3) * 0.005
-        else:
-            tp_pct = 1.005 + (score - 3) * 0.005
+        # === CALCUL DU SCORE INSTITUTIONNEL (ETF) ===
+        # Pour les ETF, on utilise les mêmes données si disponibles, sinon on met 0
+        inst_score = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
 
-        sl_pct = 0.96
-        trail_pct = 3.0
+        # === CALCUL DES TP/SL AVEC FACTEURS DYNAMIQUES ===
+        if abs(gap) >= 6:
+            tp_brut = 1.5 + (score - 3) * 0.5
+        elif abs(gap) >= 3:
+            tp_brut = 1.0 + (score - 3) * 0.5
+        else:
+            tp_brut = 0.5 + (score - 3) * 0.5
+
+        sl_brut = 2.0
+
+        # Ajustement dynamique (ETF considérés comme Large Cap par défaut)
+        cap_etf = "Large Cap"  # par défaut
+        held_pct = info.get('heldPercentInstitutions', 0.5)
+        if held_pct is None:
+            held_pct = 0.5
+        tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(
+            tp_brut, sl_brut, spread_pct, vol_ratio, cap_etf, gap, held_pct
+        )
+
+        # Application du mandat R/R ≥ 2:1
+        tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, min_ratio=2.0)
+
+        # Conversion en multiplicateurs
+        if direction == "LONG":
+            tp_mult = 1 + tp_final / 100
+            sl_mult = 1 - sl_final / 100
+        else:
+            tp_mult = 1 - tp_final / 100
+            sl_mult = 1 + sl_final / 100
+
+        trail = 3.0
+        trail += trail_adj
+        trail = max(1.0, min(trail, 6.0))
 
         return {
             'ticker': ticker,
             'exchange': exchange,
-            'price': price,                     # ← dernier prix négocié
+            'price': price,
             'gap': gap,
             'score': score,
             'vol_ratio': vol_ratio,
@@ -659,9 +756,12 @@ def analyze_etf(ticker):
             'confidence': confidence,
             'spread_pct': spread_pct,
             'direction': direction,
-            'tp_mult': round(tp_pct, 3),
-            'sl_mult': round(sl_pct, 3),
-            'trail_pct': round(trail_pct, 2)
+            'tp_mult': round(tp_mult, 3),
+            'sl_mult': round(sl_mult, 3),
+            'trail_pct': round(trail, 2),
+            'tp_pct': round(tp_final, 2),
+            'sl_pct': round(sl_final, 2),
+            'inst_interest': inst_score  # <-- ajout du score institutionnel
         }
     except Exception:
         return None
@@ -694,49 +794,68 @@ def get_verdict(confidence):
         return "Poor", "🔴"
 
 def build_setup_message(data, is_etf=False, bias="⚪ Neutral (CA)"):
+    """
+    Construit le message Telegram selon le format demandé.
+    """
     max_score = 7 if not is_etf else 5
     entry = data['price']
     direction = data['direction']
+
     if direction == "LONG":
         tp = round(entry * data['tp_mult'], 2)
         sl = round(entry * data['sl_mult'], 2)
         trail_price = round(entry * (1 - data['trail_pct'] / 100), 2)
-        tp_label = "TAKE-PROFIT"
-        sl_label = "STOP LOSS"
+        gain_pct = round((tp/entry - 1) * 100, 1)
+        loss_pct = round((1 - sl/entry) * 100, 1)
     else:
         tp = round(entry * (2 - data['tp_mult']), 2)
         sl = round(entry * (2 - data['sl_mult']), 2)
         trail_price = round(entry * (1 + data['trail_pct'] / 100), 2)
-        tp_label = "TAKE-PROFIT"
-        sl_label = "STOP LOSS"
+        gain_pct = round((1 - tp/entry) * 100, 1)
+        loss_pct = round((sl/entry - 1) * 100, 1)
+
     qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+
     spread_display = ""
     if data['spread_pct'] > 0:
         spread_usd = round((data['spread_pct'] / 100) * entry, 2)
         spread_display = f" | Spread: {data['spread_pct']:.2f}% (${spread_usd:.2f})"
+
     verdict_text, verdict_emoji = get_verdict(data['confidence'])
     direction_emoji = "📈 LONG" if direction == "LONG" else "📉 SHORT"
     gap_display = f"+{data['gap']:.2f}%" if data['gap'] >= 0 else f"{data['gap']:.2f}%"
+
+    # Construction du message selon le nouveau format
     msg = f"🔹 <b>{data['ticker']}</b> ({data['exchange']}){spread_display}\n"
     msg += f"   Direction: <b>{direction_emoji}</b>\n"
     msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
     msg += f"   GAP: {gap_display} | VOL: x{data['vol_ratio']:.2f}\n"
     if not is_etf and 'cap_category' in data:
-        msg += f"   Cap: {data['cap_category']}\n"
-    if is_etf:
-        msg += f"   AUM: {data['aum_m']}M$\n"
-    msg += f"   Bias: {bias}\n"
+        msg += f"   Cap: {data['cap_category']} | Bias: {bias}\n"
+    else:
+        msg += f"   Bias: {bias}\n"
+    # Ajout du score institutionnel avec label
+    inst = data.get('inst_interest', 0)
+    if inst >= 7:
+        inst_label = "High"
+    elif inst >= 4:
+        inst_label = "Moderate"
+    else:
+        inst_label = "Low"
+    msg += f"   🏛️ Institutional Interest: {inst}/10 ({inst_label})\n"
     msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text}\n"
     msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
-    msg += f"   📦 QTY: {qty} {'shares' if not is_etf else 'units'}\n"
-    msg += f"   📈 {tp_label}: ${format_price(tp)} ({'+' if direction == 'LONG' else ''}{round((tp/entry - 1) * 100 if direction == 'LONG' else (1 - tp/entry) * 100, 1)}%)\n"
-    msg += f"   🛑 {sl_label}: ${format_price(sl)} ({'-' if direction == 'LONG' else '+'}{round((1 - sl/entry) * 100 if direction == 'LONG' else (sl/entry - 1) * 100, 1)}%)\n"
+    msg += f"   📦 QUANTITY: {qty} {'shares' if not is_etf else 'units'}\n"
+    msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} (+{gain_pct}%)\n"
+    msg += f"   🛑 STOP LOSS: ${format_price(sl)} (-{loss_pct}%)\n"
     msg += f"   🔄 TRAILING: ${format_price(trail_price)} → {data['trail_pct']}%\n"
+    # On ne met pas le R/R dans ce format, on le garde en option si besoin
+    # msg += f"   📊 R/R: {gain_pct:.1f} / {loss_pct:.1f} = {gain_pct/loss_pct:.1f}:1\n"
+
     return msg
 
 # ==================== FONCTION D'ATTENTE ====================
 def wait_until_target(target_hour, target_minute):
-    """Attend jusqu'à l'heure:minute cible (pour les scans multiples de 15 minutes)."""
     now = datetime.now(MONTREAL_TZ)
     target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
     if target <= now:
@@ -746,13 +865,12 @@ def wait_until_target(target_hour, target_minute):
         print(f"⏳ Attente jusqu'à {target.strftime('%H:%M')}... ({diff/60:.1f} min)")
         time.sleep(diff)
 
-# ==================== MAIN CONTINU ====================
+# ==================== MAIN ====================
 def main():
     now = datetime.now(MONTREAL_TZ)
     heure = now.hour
     minute = now.minute
 
-    # Vérifier si le marché est fermé (week-end ou férié)
     if is_ca_market_closed(now):
         print("🏖️ Marché CA fermé – Arrêt.")
         if IS_MANUAL_RUN:
@@ -772,7 +890,6 @@ def main():
             send_telegram(msg)
         return
 
-    # Déterminer la session en fonction de l'heure de lancement
     if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
         session = "morning"
         start_hour, start_min = 9, 30
@@ -801,17 +918,14 @@ def main():
             send_telegram(msg)
         return
 
-    # Attendre le début de la session si nécessaire
     now = datetime.now(MONTREAL_TZ)
     if now.hour < start_hour or (now.hour == start_hour and now.minute < start_min):
         print(f"⏳ Attente du début de session à {start_hour:02d}:{start_min:02d}...")
         wait_until_target(start_hour, start_min)
         now = datetime.now(MONTREAL_TZ)
 
-    # Boucle principale
     while True:
         now = datetime.now(MONTREAL_TZ)
-        # Vérifier si on a dépassé l'heure de fin
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
             session_label = "Morning" if session == "morning" else "Afternoon"
@@ -829,53 +943,61 @@ def main():
 
         current_hour, current_min = now.hour, now.minute
 
-        # Scan des prix toutes les 15 minutes (multiples de 15)
         if current_min % 15 == 0:
             print(f"\n📊 Scan de prix à {now.strftime('%H:%M')} (session {session})")
-            # Scans stocks
+
             stocks_results = []
             for ticker in STOCK_TICKERS:
                 print(f"  - {ticker}:")
                 data = analyze_stock(ticker, verbose=True)
                 if data:
                     stocks_results.append(data)
-                    print(f"    ✅ Score {data['score']}/7 | {data['direction']}")
+                    inst = data.get('inst_interest', 0)
+                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10")
                 else:
                     print("    ❌")
-            # Scans ETFs
+
             etfs_results = []
             for ticker in ETF_TICKERS:
                 print(f"  - {ticker}...", end=" ")
                 data = analyze_etf(ticker)
                 if data:
                     etfs_results.append(data)
-                    print(f"✅ Score {data['score']}/5 | {data['direction']}")
+                    inst = data.get('inst_interest', 0)
+                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10")
                 else:
                     print("❌")
-            # Sélection et envoi Telegram
+
             best_stock = max(stocks_results, key=lambda x: (x['score'], x['vol_ratio'])) if stocks_results else None
             best_etf = max(etfs_results, key=lambda x: (x['score'], x['vol_ratio'])) if etfs_results else None
+
             if best_stock or best_etf:
+                # Construction du message principal avec le nouveau format
                 msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
-                msg += f"<i>Scan {now.strftime('%H:%M')} (ET) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs</i>\n"
-                msg += f"<i>💰 Capital: ${CAPITAL:,.0f}</i>\n"
-                msg += "═" * 35 + "\n"
+                msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution. </i>\n"
+                # Date et comptes
+                msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
+                msg += f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
+                msg += "═══════════════════════════════════\n"
+
                 if best_stock:
                     msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
                     msg += build_setup_message(best_stock, is_etf=False, bias="⚪ Neutral (CA)")
                 else:
                     msg += "\n🚀 <b>BEST STOCK SETUP</b>\n❌ No valid stock setup for this scan.\n"
+
                 if best_etf:
                     msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
                     msg += build_setup_message(best_etf, is_etf=True, bias="⚪ Neutral (CA)")
                 else:
                     msg += "\n🚀 <b>BEST ETF SETUP</b>\n❌ No valid ETF setup for this scan.\n"
+
                 msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
                 send_telegram(msg)
             else:
                 print("ℹ️ Aucun setup valide – Pas de message Telegram.")
-        # Attendre la prochaine minute multiple de 15
+
         next_min = ((current_min // 15) + 1) * 15
         next_hour = current_hour
         if next_min == 60:
