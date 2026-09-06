@@ -5,6 +5,8 @@
 # AVEC GESTION DES RISQUES DYNAMIQUE (spread, volume, cap, gap, institutions)
 # R/R ≥ 2:1 — SCORE INSTITUTIONNEL DÉTAILLÉ DANS LES LOGS
 # GESTION COMPLÈTE DES JOURS FÉRIÉS ET EARLY CLOSES
+# INTÉGRATION VWAP (Polygon.io) ET POC (Alpha Vantage)
+# SCAN TOUTES LES 30 MINUTES
 # ============================================================
 import requests
 import yfinance as yf
@@ -31,6 +33,7 @@ CONFIG = {
     "price_min_stocks": 2.00,
     "price_max_stocks": 300.00,
     "price_max_etfs": 9999.00,
+    "scan_interval_minutes": 30,
     "tickers": {
         "stocks": [
             # === EXISTANTS (54) ===
@@ -88,6 +91,8 @@ CONFIG = {
 MONTREAL_TZ = pytz.timezone('America/Toronto')
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY")
+ALPHAVANTAGE_API_KEY = os.environ.get("ALPHAVANTAGE_API_KEY")
 
 GITHUB_EVENT = os.environ.get("GITHUB_EVENT_NAME", "")
 IS_MANUAL_RUN = (GITHUB_EVENT == "workflow_dispatch") or sys.stdin.isatty()
@@ -101,6 +106,7 @@ SCORE_MIN_ETFS = CONFIG['score_min_etfs']
 PRICE_MIN_STOCKS = CONFIG['price_min_stocks']
 PRICE_MAX_STOCKS = CONFIG['price_max_stocks']
 PRICE_MAX_ETFS = CONFIG['price_max_etfs']
+SCAN_INTERVAL = CONFIG['scan_interval_minutes']
 STOCK_TICKERS = CONFIG['tickers']['stocks']
 ETF_TICKERS = CONFIG['tickers']['etfs']
 
@@ -220,8 +226,6 @@ def _build_early_close_dates(year):
     early_dates[date(year, 12, 24)] = 13
     # 31 décembre
     early_dates[date(year, 12, 31)] = 13
-    # Optionnel : vendredi avant Thanksgiving (US) si le TSX ferme plus tôt, mais c'est rare
-    # On peut l'ajouter si nécessaire, mais ce n'est pas officiel
     return early_dates
 
 def is_early_close(check_date):
@@ -299,6 +303,64 @@ def analyze_sentiment(title):
     elif any(w in text for w in bearish):
         score -= 1
     return score
+
+# ==================== VWAP ET POC ====================
+def get_vwap_polygon(ticker):
+    """Récupère le VWAP via Polygon.io. Retourne None si erreur ou clé manquante."""
+    if not POLYGON_API_KEY:
+        return None
+    try:
+        # Polygon utilise le format sans suffixe .TO pour les tickers canadiens
+        clean_ticker = ticker.replace('.TO', '').replace('.V', '')
+        url = f"https://api.polygon.io/v1/indicators/vwap/{clean_ticker}?timespan=minute&window=1&adjusted=true&apiKey={POLYGON_API_KEY}"
+        r = requests.get(url, timeout=5)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if 'results' in data and data['results'] and 'values' in data['results']:
+            # Le dernier VWAP est le plus récent
+            return data['results']['values'][-1]['value']
+        return None
+    except:
+        return None
+
+def get_poc_alphavantage(ticker):
+    """Récupère le POC via Alpha Vantage (Volume Profile simplifié). Retourne None si erreur ou clé manquante."""
+    if not ALPHAVANTAGE_API_KEY:
+        return None
+    try:
+        clean_ticker = ticker.replace('.TO', '').replace('.V', '')
+        url = f"https://www.alphavantage.co/query?function=OHLCV&symbol={clean_ticker}&interval=1min&apikey={ALPHAVANTAGE_API_KEY}&outputsize=compact"
+        r = requests.get(url, timeout=5)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if 'Time Series (1min)' not in data:
+            return None
+        time_series = data['Time Series (1min)']
+        # On calcule le POC comme le prix avec le plus gros volume sur la session
+        # On agrège les volumes par prix (approximation grossière)
+        volume_by_price = {}
+        for ts, values in time_series.items():
+            # On prend le prix de clôture comme représentatif
+            price = float(values['4. close'])
+            volume = float(values['5. volume'])
+            # Arrondir le prix à 2 décimales pour regrouper
+            price_rounded = round(price, 2)
+            volume_by_price[price_rounded] = volume_by_price.get(price_rounded, 0) + volume
+        if not volume_by_price:
+            return None
+        # Le POC est le prix avec le plus gros volume
+        poc = max(volume_by_price, key=volume_by_price.get)
+        return poc
+    except:
+        return None
+
+def get_vwap_poc(ticker):
+    """Retourne un tuple (vwap, poc) pour un ticker donné."""
+    vwap = get_vwap_polygon(ticker)
+    poc = get_poc_alphavantage(ticker)
+    return vwap, poc
 
 # ==================== SCORE INSTITUTIONNEL (AVEC DÉTAILS) ====================
 def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
@@ -606,10 +668,9 @@ def analyze_stock(ticker, verbose=True):
                 print(f"  ❌ Score {score} < {SCORE_MIN_STOCKS}")
             return None
 
-        # === CALCUL DU SCORE INSTITUTIONNEL AVEC DÉTAILS ===
+        # === CALCUL DU SCORE INSTITUTIONNEL ===
         inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
 
-        # Affichage des détails institutionnels si verbose
         if verbose:
             # Label du score
             if inst_score >= 7:
@@ -619,14 +680,11 @@ def analyze_stock(ticker, verbose=True):
             else:
                 inst_label = "Low"
             print(f"     🏛️ Inst. Interest: {inst_score}/10 ({inst_label})")
-            # heldPercentInstitutions
             held_bonus = inst_details['held_bonus']
             if held_bonus > 0:
                 print(f"       - heldPercentInstitutions: {inst_details['held']*100:.1f}% → +{held_bonus}")
-            # Short squeeze bonus
             if inst_details['short_squeeze_bonus'] > 0:
                 print(f"       - Short Ratio: {inst_details['short_ratio']:.1f} → bonus short squeeze +{inst_details['short_squeeze_bonus']}")
-            # Volume + SMA50 bonus
             vol_sma_bonus = inst_details['volume_sma_bonus']
             if vol_sma_bonus > 0:
                 if inst_details['vol_ratio'] > 2:
@@ -634,22 +692,26 @@ def analyze_stock(ticker, verbose=True):
                 else:
                     print(f"       - Vol ratio: {inst_details['vol_ratio']:.2f} (>1.5) → +{vol_sma_bonus}")
                 print(f"       - Prix > SMA50 ({inst_details['price']:.2f} > {inst_details['sma50']:.2f}) → +{vol_sma_bonus}")
-            # Short high bonus
             if inst_details['short_high_bonus'] > 0:
                 print(f"       - Short Ratio: {inst_details['short_ratio']:.1f} (>4) → +1")
             print(f"       - Total: {inst_score}/10")
 
-        # === CALCUL DES TP/SL AVEC FACTEURS DYNAMIQUES ===
+        # === RÉCUPÉRATION VWAP/POC ===
+        vwap, poc = get_vwap_poc(ticker)
+        if vwap is not None:
+            vwap = round(vwap, 2)
+        if poc is not None:
+            poc = round(poc, 2)
+
+        # === CALCUL DES TP/SL ===
         cap_category = get_market_cap_category(ticker)
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, cap_category)
 
-        # Récupération du taux d'institutions
         held_pct = info.get('heldPercentInstitutions', 0.5)
         if held_pct is None:
             held_pct = 0.5
 
-        # TP et SL bruts (basés sur score et gap)
         if abs(gap) >= 20:
             tp_brut = 2.0 + (score - 4) * 0.6
         elif abs(gap) >= 10:
@@ -662,15 +724,12 @@ def analyze_stock(ticker, verbose=True):
         else:
             sl_brut = 2.5
 
-        # Ajustement dynamique (incluant institutions)
         tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(
             tp_brut, sl_brut, spread_pct, vol_ratio, cap_category, gap, held_pct
         )
 
-        # Application du mandat R/R ≥ 2:1
         tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, min_ratio=2.0)
 
-        # Conversion en multiplicateurs
         if direction == "LONG":
             tp_mult = 1 + tp_final / 100
             sl_mult = 1 - sl_final / 100
@@ -678,7 +737,6 @@ def analyze_stock(ticker, verbose=True):
             tp_mult = 1 - tp_final / 100
             sl_mult = 1 + sl_final / 100
 
-        # Trailing stop (ajusté)
         if score >= 8:
             trail = 2.5
         elif score >= 6:
@@ -686,8 +744,8 @@ def analyze_stock(ticker, verbose=True):
         else:
             trail = 4.0
 
-        trail += trail_adj  # application de l'ajustement
-        trail = max(1.0, min(trail, 6.0))  # bornes de sécurité
+        trail += trail_adj
+        trail = max(1.0, min(trail, 6.0))
 
         return {
             'ticker': ticker,
@@ -705,7 +763,9 @@ def analyze_stock(ticker, verbose=True):
             'trail_pct': round(trail, 2),
             'tp_pct': round(tp_final, 2),
             'sl_pct': round(sl_final, 2),
-            'inst_interest': inst_score
+            'inst_interest': inst_score,
+            'vwap': vwap,
+            'poc': poc
         }
 
     except Exception as e:
@@ -792,14 +852,17 @@ def analyze_etf(ticker):
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
 
-        # === CALCUL DU SCORE INSTITUTIONNEL (ETF) AVEC DÉTAILS ===
-        inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+        # === SCORE INSTITUTIONNEL ===
+        inst_score, _ = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
 
-        # Affichage des détails institutionnels (si on voulait les logs, mais pour les ETF on les laisse pour la cohérence)
-        # Ici on ne les affiche pas pour éviter de surcharger les logs des ETF, mais on peut les ajouter si nécessaire.
-        # Pour l'instant, on garde l'affichage minimal pour les ETF.
+        # === VWAP/POC ===
+        vwap, poc = get_vwap_poc(ticker)
+        if vwap is not None:
+            vwap = round(vwap, 2)
+        if poc is not None:
+            poc = round(poc, 2)
 
-        # === CALCUL DES TP/SL AVEC FACTEURS DYNAMIQUES ===
+        # === CALCUL DES TP/SL ===
         if abs(gap) >= 6:
             tp_brut = 1.5 + (score - 3) * 0.5
         elif abs(gap) >= 3:
@@ -809,8 +872,7 @@ def analyze_etf(ticker):
 
         sl_brut = 2.0
 
-        # Ajustement dynamique (ETF considérés comme Large Cap par défaut)
-        cap_etf = "Large Cap"  # par défaut
+        cap_etf = "Large Cap"
         held_pct = info.get('heldPercentInstitutions', 0.5)
         if held_pct is None:
             held_pct = 0.5
@@ -818,10 +880,8 @@ def analyze_etf(ticker):
             tp_brut, sl_brut, spread_pct, vol_ratio, cap_etf, gap, held_pct
         )
 
-        # Application du mandat R/R ≥ 2:1
         tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, min_ratio=2.0)
 
-        # Conversion en multiplicateurs
         if direction == "LONG":
             tp_mult = 1 + tp_final / 100
             sl_mult = 1 - sl_final / 100
@@ -849,7 +909,9 @@ def analyze_etf(ticker):
             'trail_pct': round(trail, 2),
             'tp_pct': round(tp_final, 2),
             'sl_pct': round(sl_final, 2),
-            'inst_interest': inst_score
+            'inst_interest': inst_score,
+            'vwap': vwap,
+            'poc': poc
         }
     except Exception:
         return None
@@ -881,10 +943,7 @@ def get_verdict(confidence):
     else:
         return "Poor", "🔴"
 
-def build_setup_message(data, is_etf=False, bias="⚪ Neutral (CA)"):
-    """
-    Construit le message Telegram selon le format demandé.
-    """
+def build_setup_message(data, is_etf=False, bias="⚪ Neutral"):
     max_score = 7 if not is_etf else 5
     entry = data['price']
     direction = data['direction']
@@ -913,16 +972,6 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral (CA)"):
     direction_emoji = "📈 LONG" if direction == "LONG" else "📉 SHORT"
     gap_display = f"+{data['gap']:.2f}%" if data['gap'] >= 0 else f"{data['gap']:.2f}%"
 
-    # Construction du message selon le nouveau format
-    msg = f"🔹 <b>{data['ticker']}</b> ({data['exchange']}){spread_display}\n"
-    msg += f"   Direction: <b>{direction_emoji}</b>\n"
-    msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
-    msg += f"   GAP: {gap_display} | VOL: x{data['vol_ratio']:.2f}\n"
-    if not is_etf and 'cap_category' in data:
-        msg += f"   Cap: {data['cap_category']} | Bias: {bias}\n"
-    else:
-        msg += f"   Bias: {bias}\n"
-    # Ajout du score institutionnel avec label
     inst = data.get('inst_interest', 0)
     if inst >= 7:
         inst_label = "High"
@@ -930,14 +979,27 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral (CA)"):
         inst_label = "Moderate"
     else:
         inst_label = "Low"
+
+    vwap_display = f"${data['vwap']:.2f}" if data.get('vwap') is not None else "N/A"
+    poc_display = f"${data['poc']:.2f}" if data.get('poc') is not None else "N/A"
+    cap_display = f"{data['cap_category']}" if not is_etf and 'cap_category' in data else ""
+
+    msg = f"🔹 <b>{data['ticker']}</b> ({data['exchange']}){spread_display}\n"
+    msg += f"   Direction: <b>{direction_emoji}</b>\n"
+    msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
+    msg += f"   GAP: {gap_display} | Volume: x{data['vol_ratio']:.2f}"
+    if cap_display:
+        msg += f" | Cap: {cap_display}"
+    msg += "\n"
+    msg += f"   VWAP: {vwap_display} | POC: {poc_display}\n"
+    msg += f"   Market Bias: {bias}\n"
     msg += f"   🏛️ Institutional Interest: {inst}/10 ({inst_label})\n"
     msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text}\n"
     msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
     msg += f"   📦 QUANTITY: {qty} {'shares' if not is_etf else 'units'}\n"
     msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} (+{gain_pct}%)\n"
     msg += f"   🛑 STOP LOSS: ${format_price(sl)} (-{loss_pct}%)\n"
-    msg += f"   🔄 TRAILING: ${format_price(trail_price)} → {data['trail_pct']}%\n"
-
+    msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {data['trail_pct']}%\n"
     return msg
 
 # ==================== FONCTION D'ATTENTE ====================
@@ -945,7 +1007,7 @@ def wait_until_target(target_hour, target_minute):
     now = datetime.now(MONTREAL_TZ)
     target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
     if target <= now:
-        target += timedelta(minutes=15)
+        target += timedelta(minutes=SCAN_INTERVAL)
     diff = (target - now).total_seconds()
     if diff > 0:
         print(f"⏳ Attente jusqu'à {target.strftime('%H:%M')}... ({diff/60:.1f} min)")
@@ -957,7 +1019,6 @@ def main():
     heure = now.hour
     minute = now.minute
 
-    # Vérifier si le marché est fermé (week-end ou férié)
     if is_ca_market_closed(now):
         print("🏖️ Marché CA fermé – Arrêt.")
         if IS_MANUAL_RUN:
@@ -977,12 +1038,10 @@ def main():
             send_telegram(msg)
         return
 
-    # Vérifier les early closes
     early_close = is_early_close(now)
     early_hour = get_early_close_hour(now) if early_close else None
     if early_close:
         print(f"⚠️ Fermeture anticipée détectée – Marché ferme à {early_hour}:00 ET.")
-        # Envoyer un message Telegram d'avertissement (pour les runs manuels ou automatiques)
         if TELEGRAM_TOKEN:
             msg_early = (
                 "⚠️ <b>Early Close Today</b>\n"
@@ -991,7 +1050,6 @@ def main():
             )
             send_telegram(msg_early)
 
-    # Déterminer la session
     if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
         session = "morning"
         start_hour, start_min = 9, 30
@@ -1000,7 +1058,6 @@ def main():
     elif 13 <= heure <= 15 and (heure < 15 or minute <= 30):
         session = "afternoon"
         start_hour, start_min = 13, 0
-        # Ajuster l'heure de fin en cas d'early close
         if early_close and early_hour is not None:
             end_hour = early_hour
             end_min = 0
@@ -1026,17 +1083,14 @@ def main():
             send_telegram(msg)
         return
 
-    # Attendre le début de la session si nécessaire
     now = datetime.now(MONTREAL_TZ)
     if now.hour < start_hour or (now.hour == start_hour and now.minute < start_min):
         print(f"⏳ Attente du début de session à {start_hour:02d}:{start_min:02d}...")
         wait_until_target(start_hour, start_min)
         now = datetime.now(MONTREAL_TZ)
 
-    # Boucle principale
     while True:
         now = datetime.now(MONTREAL_TZ)
-        # Vérifier si on a dépassé l'heure de fin
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
             session_label = "Morning" if session == "morning" else "Afternoon"
@@ -1054,7 +1108,7 @@ def main():
 
         current_hour, current_min = now.hour, now.minute
 
-        if current_min % 15 == 0:
+        if current_min % SCAN_INTERVAL == 0:
             print(f"\n📊 Scan de prix à {now.strftime('%H:%M')} (session {session})")
 
             stocks_results = []
@@ -1064,7 +1118,9 @@ def main():
                 if data:
                     stocks_results.append(data)
                     inst = data.get('inst_interest', 0)
-                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10")
+                    vwap = data.get('vwap', 'N/A')
+                    poc = data.get('poc', 'N/A')
+                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc}")
                 else:
                     print("    ❌")
 
@@ -1075,7 +1131,9 @@ def main():
                 if data:
                     etfs_results.append(data)
                     inst = data.get('inst_interest', 0)
-                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10")
+                    vwap = data.get('vwap', 'N/A')
+                    poc = data.get('poc', 'N/A')
+                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc}")
                 else:
                     print("❌")
 
@@ -1083,35 +1141,33 @@ def main():
             best_etf = max(etfs_results, key=lambda x: (x['score'], x['vol_ratio'])) if etfs_results else None
 
             if best_stock or best_etf:
-                # Construction du message principal avec le nouveau format
                 msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
                 msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution. </i>\n"
-                # Date et comptes
                 msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
                 msg += f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
                 msg += "═══════════════════════════════════\n"
 
                 if best_stock:
                     msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
-                    msg += build_setup_message(best_stock, is_etf=False, bias="⚪ Neutral (CA)")
+                    msg += build_setup_message(best_stock, is_etf=False, bias="⚪ Neutral")
                 else:
                     msg += "\n🚀 <b>BEST STOCK SETUP</b>\n❌ No valid stock setup for this scan.\n"
 
                 if best_etf:
                     msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
-                    msg += build_setup_message(best_etf, is_etf=True, bias="⚪ Neutral (CA)")
+                    msg += build_setup_message(best_etf, is_etf=True, bias="⚪ Neutral")
                 else:
                     msg += "\n🚀 <b>BEST ETF SETUP</b>\n❌ No valid ETF setup for this scan.\n"
 
                 msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
+                msg += "<i>Informational automated signal. Not financial or trading advice. </i>"
                 send_telegram(msg)
             else:
                 print("ℹ️ Aucun setup valide – Pas de message Telegram.")
 
-        next_min = ((current_min // 15) + 1) * 15
+        next_min = ((current_min // SCAN_INTERVAL) + 1) * SCAN_INTERVAL
         next_hour = current_hour
-        if next_min == 60:
+        if next_min >= 60:
             next_min = 0
             next_hour += 1
         wait_until_target(next_hour, next_min)
