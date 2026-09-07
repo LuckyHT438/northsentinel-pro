@@ -1000,6 +1000,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral"):
     msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} (+{gain_pct}%)\n"
     msg += f"   🛑 STOP LOSS: ${format_price(sl)} (-{loss_pct}%)\n"
     msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {data['trail_pct']}%\n"
+    msg += f"   📊 R/R: {gain_pct:.1f} / {loss_pct:.1f} = {gain_pct/loss_pct:.1f}:1\n"
     return msg
 
 # ==================== FONCTION D'ATTENTE ====================
