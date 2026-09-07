@@ -32,7 +32,7 @@ CONFIG = {
     "score_min_etfs": 4,
     "price_min_stocks": 2.00,
     "price_max_stocks": 300.00,
-    "price_max_etfs": 9999.00,
+    "price_max_etfs": 300.00,
     "scan_interval_minutes": 30,
     "tickers": {
         "stocks": [
@@ -41,8 +41,8 @@ CONFIG = {
             "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI-B.TO",
             "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO",
-            "BNS.TO",
-            "ATZ.TO", "GRGD.TO", "SPCX.TO", "CSU.TO", "ATD.TO",
+            "BNS.TO", 
+            "ATZ.TO", "GRGD.TO", "SPCX.TO", "ATD.TO",
             "MRU.TO", "L.TO", "EMP.A.TO", "CP.TO", "CNR.TO",
             "TFII.TO", "MDA.TO", "BBD-B.TO", "CGO.TO", "QBR-B.TO",
             "IFC.TO", "SLF.TO", "RBA.TO",
@@ -57,13 +57,13 @@ CONFIG = {
             # Financiers
             "TD.TO", "CM.TO", "RY.TO",
             # Énergie
-            "ENB.TO", "TOU.TO", "ARX.TO", "VET.TO", "PPL.TO", "TRP.TO",
+            "ENB.TO", "ARX.TO", "VET.TO", "PPL.TO", "TRP.TO",
             # Mines & matériaux
             "BTO.TO", "FNV.TO", "HBM.TO", "AGI.TO", "NCM.TO",
-            # Technologie
-            "SHOP.TO",
-            # Industrie / conso
-            "WN.TO",
+            # Technologie / Infrastructure IA
+            "SHOP.TO", "KEEL.TO", 
+            # Industrie / Équipements tech
+            "WN.TO", "HPS-A.TO",
             # TSX-Venture
             "ARTG.V", "TOI.V", "QNC.V",
 
