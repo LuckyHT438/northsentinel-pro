@@ -429,7 +429,7 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
 def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_interest, market_bias, poc=None):
     """
     Calcule le niveau de conviction pour un setup LONG ou SHORT.
-    Retourne (label, emoji) : ("High", "🟢"), ("Moderate", "🟡"), ("Low", "⚫")
+    Retourne (label, emoji) : ("High", "🟢"), ("Moderate", "🔵"), ("Low", "🟡")
     Le POC est un bonus optionnel : s'il est cohérent avec la direction, il ajoute +1 au compteur de feux verts.
     """
     bias = market_bias.replace("⚪ ", "").replace("🟢 ", "").replace("🔴 ", "").strip()
@@ -455,9 +455,9 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
         if green_count >= 4 and bias in ["Neutral", "Risk-on"]:
             return "High", "🟢"
         elif green_count >= 3 and bias in ["Neutral", "Risk-on"]:
-            return "Moderate", "🟡"
+            return "Moderate", "🔵"
         else:
-            return "Low", "⚫"
+            return "Low", "🟡"
     
     elif direction == "SHORT":
         # Feu 1: Gap <= -3% ET volume >= 1.5
@@ -477,12 +477,12 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
         if green_count >= 4 and bias in ["Neutral", "Risk-off"]:
             return "High", "🟢"
         elif green_count >= 3 and bias == "Neutral":
-            return "Moderate", "🟡"
+            return "Moderate", "🔵"
         else:
-            return "Low", "⚫"
+            return "Low", "🟡"
     
     # Fallback
-    return "Low", "⚫"
+    return "Low", "🟡"
 
 # ==================== PRIORITY RANK ====================
 def calculate_priority_score(data, market_bias, is_etf=False):
