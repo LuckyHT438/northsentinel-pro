@@ -6,7 +6,7 @@
 # R/R ≥ 2:1 — SCORE INSTITUTIONNEL DÉTAILLÉ DANS LES LOGS
 # GESTION COMPLÈTE DES JOURS FÉRIÉS ET EARLY CLOSES
 # INTÉGRATION VWAP (Polygon.io) ET POC (Alpha Vantage)
-# SCAN TOUTES LES 30 MINUTES — CONVICTION INTÉGRÉE
+# SCAN TOUTES LES 30 MINUTES — CONVICTION AVEC BONUS POC
 # ============================================================
 import requests
 import yfinance as yf
@@ -424,49 +424,58 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     details['total'] = score
     return score, details
 
-# ==================== CONVICTION ====================
-def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_interest, market_bias):
+# ==================== CONVICTION AVEC BONUS POC ====================
+def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_interest, market_bias, poc=None):
     """
     Calcule le niveau de conviction pour un setup LONG ou SHORT.
     Retourne (label, emoji) : ("High", "🟢"), ("Moderate", "🟡"), ("Low", "⚫")
+    Le POC est un bonus optionnel : s'il est cohérent avec la direction, il ajoute +1 au compteur de feux verts.
     """
-    # Nettoyage du market_bias (enlève les émojis)
     bias = market_bias.replace("⚪ ", "").replace("🟢 ", "").replace("🔴 ", "").strip()
     
-    # Feux verts pour LONG
+    # Initialisation des feux verts
+    green_count = 0
+    
     if direction == "LONG":
         # Feu 1: Gap >= 3% ET volume >= 1.5
-        green_gap_vol = (gap >= 3.0 and vol_ratio >= 1.5)
+        if gap >= 3.0 and vol_ratio >= 1.5:
+            green_count += 1
         # Feu 2: VWAP disponible ET entry_price dans 0.5% du VWAP
-        green_vwap = (vwap is not None and abs(entry_price - vwap) / vwap <= 0.005)
+        if vwap is not None and abs(entry_price - vwap) / vwap <= 0.005:
+            green_count += 1
         # Feu 3: Inst. Interest >= 7
-        green_inst = (inst_interest >= 7)
-        
-        green_count = sum([green_gap_vol, green_vwap, green_inst])
+        if inst_interest >= 7:
+            green_count += 1
+        # Bonus POC : si POC disponible et entry_price >= POC (ou dans 1%)
+        if poc is not None and entry_price >= poc * 0.99:
+            green_count += 1
         
         # Décision
-        if green_count == 3 and bias in ["Neutral", "Risk-on"]:
+        if green_count >= 4 and bias in ["Neutral", "Risk-on"]:
             return "High", "🟢"
-        elif green_count >= 2 and bias in ["Neutral", "Risk-on"]:
+        elif green_count >= 3 and bias in ["Neutral", "Risk-on"]:
             return "Moderate", "🟡"
         else:
             return "Low", "⚫"
     
-    # Feux verts pour SHORT
     elif direction == "SHORT":
         # Feu 1: Gap <= -3% ET volume >= 1.5
-        green_gap_vol = (gap <= -3.0 and vol_ratio >= 1.5)
+        if gap <= -3.0 and vol_ratio >= 1.5:
+            green_count += 1
         # Feu 2: VWAP disponible ET entry_price est en dessous du VWAP avec marge >= 0.2%
-        green_vwap = (vwap is not None and entry_price < vwap * 0.998)
+        if vwap is not None and entry_price < vwap * 0.998:
+            green_count += 1
         # Feu 3: Inst. Interest >= 7
-        green_inst = (inst_interest >= 7)
-        
-        green_count = sum([green_gap_vol, green_vwap, green_inst])
+        if inst_interest >= 7:
+            green_count += 1
+        # Bonus POC : si POC disponible et entry_price <= POC (ou dans 1%)
+        if poc is not None and entry_price <= poc * 1.01:
+            green_count += 1
         
         # Décision
-        if green_count == 3 and bias in ["Neutral", "Risk-off"]:
+        if green_count >= 4 and bias in ["Neutral", "Risk-off"]:
             return "High", "🟢"
-        elif green_count == 2 and bias == "Neutral":
+        elif green_count >= 3 and bias == "Neutral":
             return "Moderate", "🟡"
         else:
             return "Low", "⚫"
@@ -814,7 +823,7 @@ def analyze_stock(ticker, verbose=True):
             'tp_pct': round(tp_final, 2),
             'sl_pct': round(sl_final, 2),
             'inst_interest': inst_score,
-            'short_ratio': short_ratio,   # ajout pour affichage
+            'short_ratio': short_ratio,
             'vwap': vwap,
             'poc': poc
         }
@@ -964,7 +973,7 @@ def analyze_etf(ticker):
             'tp_pct': round(tp_final, 2),
             'sl_pct': round(sl_final, 2),
             'inst_interest': inst_score,
-            'short_ratio': short_ratio,   # ajout pour affichage (peut être None)
+            'short_ratio': short_ratio,
             'vwap': vwap,
             'poc': poc
         }
@@ -1039,16 +1048,15 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral"):
     poc_display = f"${data['poc']:.2f}" if data.get('poc') is not None else "N/A"
     cap_display = f"{data['cap_category']}" if not is_etf and 'cap_category' in data else ""
 
-    # Short Ratio
     short_ratio = data.get('short_ratio')
     if short_ratio is not None:
         short_display = f"{short_ratio:.1f}"
     else:
         short_display = "N/A"
 
-    # Conviction
+    # Conviction avec bonus POC
     conv_label, conv_emoji = calculate_conviction(
-        direction, data['gap'], data['vol_ratio'], data.get('vwap'), entry, inst, bias
+        direction, data['gap'], data['vol_ratio'], data.get('vwap'), entry, inst, bias, data.get('poc')
     )
 
     msg = f"🔹 <b>{data['ticker']}</b> ({data['exchange']}){spread_display}\n"
@@ -1067,6 +1075,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral"):
     msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} (+{gain_pct}%)\n"
     msg += f"   🛑 STOP LOSS: ${format_price(sl)} (-{loss_pct}%)\n"
     msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {data['trail_pct']}%\n"
+    msg += f"   📊 R/R: {gain_pct:.1f} / {loss_pct:.1f} = {gain_pct/loss_pct:.1f}:1\n"
     return msg
 
 # ==================== FONCTION D'ATTENTE ====================
