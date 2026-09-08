@@ -838,12 +838,16 @@ def analyze_stock(ticker, verbose=True):
 
         tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, min_ratio=2.0)
 
+        # Stockage des pourcentages
+        tp_pct = tp_final
+        sl_pct = sl_final
+
         if direction == "LONG":
-            tp_mult = 1 + tp_final / 100
-            sl_mult = 1 - sl_final / 100
+            tp_mult = 1 + tp_pct / 100
+            sl_mult = 1 - sl_pct / 100
         else:
-            tp_mult = 1 - tp_final / 100
-            sl_mult = 1 + sl_final / 100
+            tp_mult = 1 - tp_pct / 100
+            sl_mult = 1 + sl_pct / 100
 
         if score >= 8:
             trail = 2.5
@@ -869,8 +873,8 @@ def analyze_stock(ticker, verbose=True):
             'tp_mult': round(tp_mult, 3),
             'sl_mult': round(sl_mult, 3),
             'trail_pct': round(trail, 2),
-            'tp_pct': round(tp_final, 2),
-            'sl_pct': round(sl_final, 2),
+            'tp_pct': round(tp_pct, 2),
+            'sl_pct': round(sl_pct, 2),
             'inst_interest': inst_score,
             'short_ratio': short_ratio,
             'vwap': vwap,
@@ -994,12 +998,16 @@ def analyze_etf(ticker):
 
         tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, min_ratio=2.0)
 
+        # Stockage des pourcentages
+        tp_pct = tp_final
+        sl_pct = sl_final
+
         if direction == "LONG":
-            tp_mult = 1 + tp_final / 100
-            sl_mult = 1 - sl_final / 100
+            tp_mult = 1 + tp_pct / 100
+            sl_mult = 1 - sl_pct / 100
         else:
-            tp_mult = 1 - tp_final / 100
-            sl_mult = 1 + sl_final / 100
+            tp_mult = 1 - tp_pct / 100
+            sl_mult = 1 + sl_pct / 100
 
         trail = 3.0
         trail += trail_adj
@@ -1019,8 +1027,8 @@ def analyze_etf(ticker):
             'tp_mult': round(tp_mult, 3),
             'sl_mult': round(sl_mult, 3),
             'trail_pct': round(trail, 2),
-            'tp_pct': round(tp_final, 2),
-            'sl_pct': round(sl_final, 2),
+            'tp_pct': round(tp_pct, 2),
+            'sl_pct': round(sl_pct, 2),
             'inst_interest': inst_score,
             'short_ratio': short_ratio,
             'vwap': vwap,
@@ -1057,22 +1065,33 @@ def get_verdict(confidence):
 
 # ============================================================
 def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
+    """
+    Construit le message Telegram avec des niveaux de sortie corrects pour LONG et SHORT.
+    Pour un SHORT : le Trailing Stop est calculé avec trail_pct (plus serré que le SL).
+    Pour un LONG : le Trailing Stop est calculé avec trail_pct (inchangé).
+    """
     max_score = 7 if not is_etf else 5
     entry = data['price']
     direction = data['direction']
+    tp_pct = data.get('tp_pct', 0.0)
+    sl_pct = data.get('sl_pct', 0.0)
+    trail_pct = data.get('trail_pct', 0.0)
 
     if direction == "LONG":
-        tp = round(entry * data['tp_mult'], 2)
-        sl = round(entry * data['sl_mult'], 2)
-        trail_price = round(entry * (1 - data['trail_pct'] / 100), 2)
-        gain_pct = round((tp/entry - 1) * 100, 1)
-        loss_pct = round((1 - sl/entry) * 100, 1)
-    else:
-        tp = round(entry * (2 - data['tp_mult']), 2)
-        sl = round(entry * (2 - data['sl_mult']), 2)
-        trail_price = round(entry * (1 + data['trail_pct'] / 100), 2)
-        gain_pct = round((1 - tp/entry) * 100, 1)
-        loss_pct = round((sl/entry - 1) * 100, 1)
+        tp = round(entry * (1 + tp_pct / 100), 2)
+        sl = round(entry * (1 - sl_pct / 100), 2)
+        trail_price = round(entry * (1 - trail_pct / 100), 2)
+        gain_display = f"+{tp_pct:.1f}%"
+        loss_display = f"-{sl_pct:.1f}%"
+        trailing_display = f"{trail_pct:.1f}%"
+    else:  # SHORT
+        tp = round(entry * (1 - tp_pct / 100), 2)
+        sl = round(entry * (1 + sl_pct / 100), 2)
+        # Trailing Stop plus serré que le SL (utilise trail_pct)
+        trail_price = round(entry * (1 + trail_pct / 100), 2)
+        gain_display = f"-{tp_pct:.1f}%"
+        loss_display = f"+{sl_pct:.1f}%"
+        trailing_display = f"{trail_pct:.1f}%"
 
     qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
 
@@ -1098,10 +1117,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     cap_display = f"{data['cap_category']}" if not is_etf and 'cap_category' in data else ""
 
     short_ratio = data.get('short_ratio')
-    if short_ratio is not None:
-        short_display = f"{short_ratio:.1f}"
-    else:
-        short_display = "N/A"
+    short_display = f"{short_ratio:.1f}" if short_ratio is not None else "N/A"
 
     # Conviction avec bonus POC
     conv_label, conv_emoji = calculate_conviction(
@@ -1121,10 +1137,20 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text} | Conviction: {conv_emoji} {conv_label} | Rank: {rank}\n"
     msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
     msg += f"   📦 QUANTITY: {qty} {'shares' if not is_etf else 'units'}\n"
-    msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} (+{gain_pct}%)\n"
-    msg += f"   🛑 STOP LOSS: ${format_price(sl)} (-{loss_pct}%)\n"
-    msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {data['trail_pct']}%\n"
-    msg += f"   📊 R/R: {gain_pct:.1f} / {loss_pct:.1f} = {gain_pct/loss_pct:.1f}:1\n"
+    if direction == "LONG":
+        msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} ({gain_display})\n"
+        msg += f"   🛑 STOP LOSS: ${format_price(sl)} ({loss_display})\n"
+    else:  # SHORT
+        msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} ({gain_display})\n"
+        msg += f"   🛑 STOP LOSS: ${format_price(sl)} ({loss_display})\n"
+    # TRAILING (identique pour les deux directions)
+    msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {trailing_display}\n"
+    # R/R (toujours positif)
+    if tp_pct > 0 and sl_pct > 0:
+        rr = tp_pct / sl_pct
+        msg += f"   📊 R/R: {tp_pct:.1f} / {sl_pct:.1f} = {rr:.1f}:1\n"
+    else:
+        msg += f"   📊 R/R: N/A\n"
     return msg
 
 # ==================== FONCTION D'ATTENTE ====================
@@ -1275,10 +1301,8 @@ def main():
                 setups.append({'data': best_etf, 'is_etf': True})
 
             if len(setups) == 2:
-                # Calcul des scores de priorité
                 s1 = calculate_priority_score(setups[0]['data'], "⚪ Neutral", setups[0]['is_etf'])
                 s2 = calculate_priority_score(setups[1]['data'], "⚪ Neutral", setups[1]['is_etf'])
-                # Classement
                 if s1 >= s2:
                     setups[0]['rank'] = "1/2"
                     setups[1]['rank'] = "2/2"
