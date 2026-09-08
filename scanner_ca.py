@@ -18,6 +18,12 @@
 # (trail_pct <= sl_final * 0.9), pour garantir que le Trailing Stop reste
 # toujours plus serré (plus proche de l'entrée) que le Stop Loss dur,
 # dans les deux directions.
+#
+# >>> CORRECTIF (2026-09-08) : arrêt automatique à la fin de session <<<
+# Avant : le script attendait la prochaine cible (30 min) même après l'heure
+# de fin, ce qui retardait l'arrêt.
+# Après : si la prochaine cible est après l'heure de fin, le script s'arrête
+# immédiatement, sans attendre.
 # ============================================================
 import requests
 import yfinance as yf
@@ -1269,6 +1275,7 @@ def main():
 
     while True:
         now = datetime.now(MONTREAL_TZ)
+        # Vérifier si on a dépassé l'heure de fin
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
             session_label = "Morning" if session == "morning" else "Afternoon"
@@ -1361,11 +1368,18 @@ def main():
             else:
                 print("ℹ️ Aucun setup valide – Pas de message Telegram.")
 
+        # Calcul de la prochaine cible
         next_min = ((current_min // SCAN_INTERVAL) + 1) * SCAN_INTERVAL
         next_hour = current_hour
         if next_min >= 60:
             next_min = 0
             next_hour += 1
+
+        # >>> CORRECTIF : si la prochaine cible est après la fin, on arrête immédiatement
+        if next_hour > end_hour or (next_hour == end_hour and next_min > end_min):
+            print(f"⏹️ Prochaine cible après la fin de session – Arrêt immédiat.")
+            break
+
         wait_until_target(next_hour, next_min)
 
 if __name__ == "__main__":
