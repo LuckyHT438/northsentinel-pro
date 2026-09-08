@@ -6,7 +6,7 @@
 # R/R ≥ 2:1 — SCORE INSTITUTIONNEL DÉTAILLÉ DANS LES LOGS
 # GESTION COMPLÈTE DES JOURS FÉRIÉS ET EARLY CLOSES
 # INTÉGRATION VWAP (Polygon.io) ET POC (Alpha Vantage)
-# SCAN TOUTES LES 30 MINUTES
+# SCAN TOUTES LES 30 MINUTES — CONVICTION INTÉGRÉE
 # ============================================================
 import requests
 import yfinance as yf
@@ -41,7 +41,7 @@ CONFIG = {
             "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI-B.TO",
             "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO",
-            "BNS.TO", 
+            "BNS.TO",
             "ATZ.TO", "GRGD.TO", "SPCX.TO", "ATD.TO",
             "MRU.TO", "L.TO", "EMP.A.TO", "CP.TO", "CNR.TO",
             "TFII.TO", "MDA.TO", "BBD-B.TO", "CGO.TO", "QBR-B.TO",
@@ -61,7 +61,7 @@ CONFIG = {
             # Mines & matériaux
             "BTO.TO", "FNV.TO", "HBM.TO", "AGI.TO", "NCM.TO",
             # Technologie / Infrastructure IA
-            "SHOP.TO", "KEEL.TO", 
+            "SHOP.TO", "KEEL.TO",
             # Industrie / Équipements tech
             "WN.TO", "HPS-A.TO",
             # TSX-Venture
@@ -424,6 +424,56 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     details['total'] = score
     return score, details
 
+# ==================== CONVICTION ====================
+def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_interest, market_bias):
+    """
+    Calcule le niveau de conviction pour un setup LONG ou SHORT.
+    Retourne (label, emoji) : ("High", "🟢"), ("Moderate", "🟡"), ("Low", "⚫")
+    """
+    # Nettoyage du market_bias (enlève les émojis)
+    bias = market_bias.replace("⚪ ", "").replace("🟢 ", "").replace("🔴 ", "").strip()
+    
+    # Feux verts pour LONG
+    if direction == "LONG":
+        # Feu 1: Gap >= 3% ET volume >= 1.5
+        green_gap_vol = (gap >= 3.0 and vol_ratio >= 1.5)
+        # Feu 2: VWAP disponible ET entry_price dans 0.5% du VWAP
+        green_vwap = (vwap is not None and abs(entry_price - vwap) / vwap <= 0.005)
+        # Feu 3: Inst. Interest >= 7
+        green_inst = (inst_interest >= 7)
+        
+        green_count = sum([green_gap_vol, green_vwap, green_inst])
+        
+        # Décision
+        if green_count == 3 and bias in ["Neutral", "Risk-on"]:
+            return "High", "🟢"
+        elif green_count >= 2 and bias in ["Neutral", "Risk-on"]:
+            return "Moderate", "🟡"
+        else:
+            return "Low", "⚫"
+    
+    # Feux verts pour SHORT
+    elif direction == "SHORT":
+        # Feu 1: Gap <= -3% ET volume >= 1.5
+        green_gap_vol = (gap <= -3.0 and vol_ratio >= 1.5)
+        # Feu 2: VWAP disponible ET entry_price est en dessous du VWAP avec marge >= 0.2%
+        green_vwap = (vwap is not None and entry_price < vwap * 0.998)
+        # Feu 3: Inst. Interest >= 7
+        green_inst = (inst_interest >= 7)
+        
+        green_count = sum([green_gap_vol, green_vwap, green_inst])
+        
+        # Décision
+        if green_count == 3 and bias in ["Neutral", "Risk-off"]:
+            return "High", "🟢"
+        elif green_count == 2 and bias == "Neutral":
+            return "Moderate", "🟡"
+        else:
+            return "Low", "⚫"
+    
+    # Fallback
+    return "Low", "⚫"
+
 # ==================== FONCTIONS D'ANALYSE ====================
 def get_market_cap_category(ticker):
     try:
@@ -764,6 +814,7 @@ def analyze_stock(ticker, verbose=True):
             'tp_pct': round(tp_final, 2),
             'sl_pct': round(sl_final, 2),
             'inst_interest': inst_score,
+            'short_ratio': short_ratio,   # ajout pour affichage
             'vwap': vwap,
             'poc': poc
         }
@@ -862,6 +913,9 @@ def analyze_etf(ticker):
         if poc is not None:
             poc = round(poc, 2)
 
+        # === Récupération du Short Ratio (si disponible) ===
+        short_ratio = info.get('shortRatio', None)
+
         # === CALCUL DES TP/SL ===
         if abs(gap) >= 6:
             tp_brut = 1.5 + (score - 3) * 0.5
@@ -910,6 +964,7 @@ def analyze_etf(ticker):
             'tp_pct': round(tp_final, 2),
             'sl_pct': round(sl_final, 2),
             'inst_interest': inst_score,
+            'short_ratio': short_ratio,   # ajout pour affichage (peut être None)
             'vwap': vwap,
             'poc': poc
         }
@@ -984,23 +1039,34 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral"):
     poc_display = f"${data['poc']:.2f}" if data.get('poc') is not None else "N/A"
     cap_display = f"{data['cap_category']}" if not is_etf and 'cap_category' in data else ""
 
+    # Short Ratio
+    short_ratio = data.get('short_ratio')
+    if short_ratio is not None:
+        short_display = f"{short_ratio:.1f}"
+    else:
+        short_display = "N/A"
+
+    # Conviction
+    conv_label, conv_emoji = calculate_conviction(
+        direction, data['gap'], data['vol_ratio'], data.get('vwap'), entry, inst, bias
+    )
+
     msg = f"🔹 <b>{data['ticker']}</b> ({data['exchange']}){spread_display}\n"
     msg += f"   Direction: <b>{direction_emoji}</b>\n"
     msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
-    msg += f"   GAP: {gap_display} | Volume: x{data['vol_ratio']:.2f}"
+    msg += f"   GAP: {gap_display} | Volume: x{data['vol_ratio']:.2f} | Short ratio: {short_display}\n"
+    msg += f"   VWAP: {vwap_display} | POC: {poc_display}"
     if cap_display:
         msg += f" | Cap: {cap_display}"
     msg += "\n"
-    msg += f"   VWAP: {vwap_display} | POC: {poc_display}\n"
     msg += f"   Market Bias: {bias}\n"
     msg += f"   🏛️ Institutional Interest: {inst}/10 ({inst_label})\n"
-    msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text}\n"
+    msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text} | Conviction: {conv_emoji} {conv_label}\n"
     msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
     msg += f"   📦 QUANTITY: {qty} {'shares' if not is_etf else 'units'}\n"
     msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} (+{gain_pct}%)\n"
     msg += f"   🛑 STOP LOSS: ${format_price(sl)} (-{loss_pct}%)\n"
     msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {data['trail_pct']}%\n"
-    msg += f"   📊 R/R: {gain_pct:.1f} / {loss_pct:.1f} = {gain_pct/loss_pct:.1f}:1\n"
     return msg
 
 # ==================== FONCTION D'ATTENTE ====================
@@ -1121,7 +1187,8 @@ def main():
                     inst = data.get('inst_interest', 0)
                     vwap = data.get('vwap', 'N/A')
                     poc = data.get('poc', 'N/A')
-                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc}")
+                    short_r = data.get('short_ratio', 'N/A')
+                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc} | Short: {short_r}")
                 else:
                     print("    ❌")
 
@@ -1134,7 +1201,8 @@ def main():
                     inst = data.get('inst_interest', 0)
                     vwap = data.get('vwap', 'N/A')
                     poc = data.get('poc', 'N/A')
-                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc}")
+                    short_r = data.get('short_ratio', 'N/A')
+                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc} | Short: {short_r}")
                 else:
                     print("❌")
 
