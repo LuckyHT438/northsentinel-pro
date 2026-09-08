@@ -995,18 +995,18 @@ def calculate_quantity(entry, stop, capital, risk_pct, max_cap_pct):
 def format_price(p):
     return f"{p:.2f}"
 
+# ============================================================
+# VERDICT SIMPLIFIÉ (Weak et Poor supprimés)
+# ============================================================
 def get_verdict(confidence):
     if confidence >= 8.5:
         return "Strong", "🟢"
     elif confidence >= 7.5:
         return "Favorable", "🔵"
-    elif confidence >= 5.5:
-        return "Mixed", "🟡"
-    elif confidence >= 3.5:
-        return "Weak", "🟠"
     else:
-        return "Poor", "🔴"
+        return "Mixed", "🟡"
 
+# ============================================================
 def build_setup_message(data, is_etf=False, bias="⚪ Neutral"):
     max_score = 7 if not is_etf else 5
     entry = data['price']
