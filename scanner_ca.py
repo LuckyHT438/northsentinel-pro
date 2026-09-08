@@ -24,6 +24,10 @@
 # de fin, ce qui retardait l'arrêt.
 # Après : si la prochaine cible est après l'heure de fin, le script s'arrête
 # immédiatement, sans attendre.
+#
+# >>> CORRECTIF (2026-09-08) : affichage de l'AUM pour les ETFs <<<
+# Ajout de l'AUM (Assets Under Management) sur la ligne VWAP/POC
+# des messages Telegram pour les ETFs.
 # ============================================================
 import requests
 import yfinance as yf
@@ -1102,6 +1106,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     Construit le message Telegram avec des niveaux de sortie corrects pour LONG et SHORT.
     Le Trailing Stop est désormais toujours calculé pour rester plus serré que le SL
     (trail_pct <= sl_pct * 0.9), afin d'être cohérent dans les deux directions.
+    Pour les ETFs, l'AUM est affiché sur la ligne VWAP/POC.
     """
     max_score = 7 if not is_etf else 5
     entry = data['price']
@@ -1161,7 +1166,10 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     msg += f"   Direction: <b>{direction_emoji}</b>\n"
     msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
     msg += f"   GAP: {gap_display} | Volume: x{data['vol_ratio']:.2f} | Short ratio: {short_display}\n"
+    # VWAP, POC et (pour ETF) AUM
     msg += f"   VWAP: {vwap_display} | POC: {poc_display}"
+    if is_etf and data.get('aum_m') is not None:
+        msg += f" | AUM: {data['aum_m']:.1f}M$"
     if cap_display:
         msg += f" | Cap: {cap_display}"
     msg += "\n"
