@@ -7,6 +7,7 @@
 # GESTION COMPLÈTE DES JOURS FÉRIÉS ET EARLY CLOSES
 # INTÉGRATION VWAP (Polygon.io) ET POC (Alpha Vantage)
 # SCAN TOUTES LES 30 MINUTES — CONVICTION AVEC BONUS POC
+# PRIORITY RANK POUR DÉPARTAGER LES SETUPS
 # ============================================================
 import requests
 import yfinance as yf
@@ -482,6 +483,54 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
     
     # Fallback
     return "Low", "⚫"
+
+# ==================== PRIORITY RANK ====================
+def calculate_priority_score(data, market_bias, is_etf=False):
+    """
+    Calcule un score de priorité objectif (sur ~20) pour classer les setups.
+    Plus le score est élevé, plus le setup est prioritaire.
+    """
+    # 1. Verdict (Strong=3, Favorable=2, Mixed=1)
+    verdict_text = get_verdict(data['confidence'])[0]
+    verdict_map = {"Strong": 3, "Favorable": 2, "Mixed": 1}
+    v_score = verdict_map.get(verdict_text, 1)
+
+    # 2. Conviction (High=3, Moderate=2, Low=1)
+    conv_label, _ = calculate_conviction(
+        data['direction'], data['gap'], data['vol_ratio'],
+        data.get('vwap'), data['price'], data['inst_interest'],
+        market_bias, data.get('poc')
+    )
+    conv_map = {"High": 3, "Moderate": 2, "Low": 1}
+    c_score = conv_map.get(conv_label, 1)
+
+    # 3. Quality (score normalisé)
+    max_score = 7 if not is_etf else 5
+    q_score = data['score'] / max_score
+
+    # 4. Gap (capé à 10 %)
+    gap_score = min(abs(data['gap']), 10.0) / 10.0
+
+    # 5. VWAP (distance en %, max 5 %)
+    vwap_score = 0.0
+    if data.get('vwap') is not None and data['vwap'] > 0:
+        diff_pct = abs(data['price'] - data['vwap']) / data['vwap'] * 100
+        vwap_score = max(0.0, 1.0 - (diff_pct / 5.0))
+
+    # 6. Market Bias (direction alignée ?)
+    bias_score = 0.0
+    clean_bias = market_bias.replace("⚪ ", "").replace("🟢 ", "").replace("🔴 ", "").strip()
+    if data['direction'] == "LONG" and clean_bias == "Risk-on":
+        bias_score = 0.5
+    elif data['direction'] == "SHORT" and clean_bias == "Risk-off":
+        bias_score = 0.5
+    elif (data['direction'] == "LONG" and clean_bias == "Risk-off") or (data['direction'] == "SHORT" and clean_bias == "Risk-on"):
+        bias_score = -0.5
+    # Neutral reste 0
+
+    # Total (sur ~20.5)
+    total = (v_score * 2.5) + (c_score * 2.5) + (q_score * 2.0) + (gap_score * 1.5) + (vwap_score * 1.5) + bias_score
+    return round(total, 2)
 
 # ==================== FONCTIONS D'ANALYSE ====================
 def get_market_cap_category(ticker):
@@ -1007,7 +1056,7 @@ def get_verdict(confidence):
         return "Mixed", "🟡"
 
 # ============================================================
-def build_setup_message(data, is_etf=False, bias="⚪ Neutral"):
+def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     max_score = 7 if not is_etf else 5
     entry = data['price']
     direction = data['direction']
@@ -1069,7 +1118,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral"):
     msg += "\n"
     msg += f"   Market Bias: {bias}\n"
     msg += f"   🏛️ Institutional Interest: {inst}/10 ({inst_label})\n"
-    msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text} | Conviction: {conv_emoji} {conv_label}\n"
+    msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text} | Conviction: {conv_emoji} {conv_label} | Rank: {rank}\n"
     msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
     msg += f"   📦 QUANTITY: {qty} {'shares' if not is_etf else 'units'}\n"
     msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} (+{gain_pct}%)\n"
@@ -1218,24 +1267,42 @@ def main():
             best_stock = max(stocks_results, key=lambda x: (x['score'], x['vol_ratio'])) if stocks_results else None
             best_etf = max(etfs_results, key=lambda x: (x['score'], x['vol_ratio'])) if etfs_results else None
 
-            if best_stock or best_etf:
+            # === CLASSEMENT DES SETUPS AVEC PRIORITY RANK ===
+            setups = []
+            if best_stock:
+                setups.append({'data': best_stock, 'is_etf': False})
+            if best_etf:
+                setups.append({'data': best_etf, 'is_etf': True})
+
+            if len(setups) == 2:
+                # Calcul des scores de priorité
+                s1 = calculate_priority_score(setups[0]['data'], "⚪ Neutral", setups[0]['is_etf'])
+                s2 = calculate_priority_score(setups[1]['data'], "⚪ Neutral", setups[1]['is_etf'])
+                # Classement
+                if s1 >= s2:
+                    setups[0]['rank'] = "1/2"
+                    setups[1]['rank'] = "2/2"
+                else:
+                    setups[0]['rank'] = "2/2"
+                    setups[1]['rank'] = "1/2"
+            elif len(setups) == 1:
+                setups[0]['rank'] = "1/1"
+            else:
+                setups = []
+
+            if setups:
                 msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
                 msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution. </i>\n"
                 msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
                 msg += f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
                 msg += "═══════════════════════════════════\n"
 
-                if best_stock:
-                    msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
-                    msg += build_setup_message(best_stock, is_etf=False, bias="⚪ Neutral")
-                else:
-                    msg += "\n🚀 <b>BEST STOCK SETUP</b>\n❌ No valid stock setup for this scan.\n"
-
-                if best_etf:
-                    msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
-                    msg += build_setup_message(best_etf, is_etf=True, bias="⚪ Neutral")
-                else:
-                    msg += "\n🚀 <b>BEST ETF SETUP</b>\n❌ No valid ETF setup for this scan.\n"
+                for setup in setups:
+                    if not setup['is_etf']:
+                        msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
+                    else:
+                        msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
+                    msg += build_setup_message(setup['data'], is_etf=setup['is_etf'], bias="⚪ Neutral", rank=setup['rank'])
 
                 msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 msg += "<i>Informational automated signal. Not financial or trading advice. </i>"
