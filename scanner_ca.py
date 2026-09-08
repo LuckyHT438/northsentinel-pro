@@ -8,6 +8,16 @@
 # INTÉGRATION VWAP (Polygon.io) ET POC (Alpha Vantage)
 # SCAN TOUTES LES 30 MINUTES — CONVICTION AVEC BONUS POC
 # PRIORITY RANK POUR DÉPARTAGER LES SETUPS
+#
+# >>> CORRECTIF (2026-09-08) : cohérence du Trailing Stop <<<
+# Avant : trail_pct était calculé indépendamment de sl_pct (souvent > sl_pct),
+# ce qui plaçait le Trailing Stop AU-DELÀ du Stop Loss (des deux côtés,
+# LONG et SHORT) → le SL était toujours touché en premier, rendant le
+# Trailing Stop inatteignable/incohérent.
+# Après : trail_pct est systématiquement borné à une fraction de sl_final
+# (trail_pct <= sl_final * 0.9), pour garantir que le Trailing Stop reste
+# toujours plus serré (plus proche de l'entrée) que le Stop Loss dur,
+# dans les deux directions.
 # ============================================================
 import requests
 import yfinance as yf
@@ -433,10 +443,10 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
     Le POC est un bonus optionnel : s'il est cohérent avec la direction, il ajoute +1 au compteur de feux verts.
     """
     bias = market_bias.replace("⚪ ", "").replace("🟢 ", "").replace("🔴 ", "").strip()
-    
+
     # Initialisation des feux verts
     green_count = 0
-    
+
     if direction == "LONG":
         # Feu 1: Gap >= 3% ET volume >= 1.5
         if gap >= 3.0 and vol_ratio >= 1.5:
@@ -450,7 +460,7 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
         # Bonus POC : si POC disponible et entry_price >= POC (ou dans 1%)
         if poc is not None and entry_price >= poc * 0.99:
             green_count += 1
-        
+
         # Décision
         if green_count >= 4 and bias in ["Neutral", "Risk-on"]:
             return "High", "🟢"
@@ -458,7 +468,7 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
             return "Moderate", "🔵"
         else:
             return "Low", "🟡"
-    
+
     elif direction == "SHORT":
         # Feu 1: Gap <= -3% ET volume >= 1.5
         if gap <= -3.0 and vol_ratio >= 1.5:
@@ -472,7 +482,7 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
         # Bonus POC : si POC disponible et entry_price <= POC (ou dans 1%)
         if poc is not None and entry_price <= poc * 1.01:
             green_count += 1
-        
+
         # Décision
         if green_count >= 4 and bias in ["Neutral", "Risk-off"]:
             return "High", "🟢"
@@ -480,7 +490,7 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
             return "Moderate", "🔵"
         else:
             return "Low", "🟡"
-    
+
     # Fallback
     return "Low", "🟡"
 
@@ -639,6 +649,23 @@ def apply_risk_mandate(tp_pct, sl_pct, min_ratio=2.0):
     sl_pct = min(sl_pct, 3.0)
 
     return round(tp_pct, 2), round(sl_pct, 2)
+
+def compute_coherent_trailing(base_trail, trail_adj, sl_final):
+    """
+    >>> CORRECTIF <<<
+    Calcule un Trailing Stop toujours cohérent avec le Stop Loss :
+    le Trailing Stop doit rester PLUS SERRÉ (plus proche de l'entrée)
+    que le Stop Loss dur, sinon le SL est systématiquement touché en
+    premier et le Trailing Stop devient inatteignable / incohérent
+    (bug observé sur les SHORT, mais présent aussi côté LONG).
+
+    Règle : trail_pct <= sl_final * 0.9, avec un plancher de 0.3%.
+    """
+    trail = base_trail + trail_adj
+    trail = max(1.0, min(trail, 6.0))
+    trail = min(trail, sl_final * 0.9)
+    trail = max(trail, 0.3)
+    return round(trail, 2)
 
 # ==================== ANALYSE STOCKS ====================
 def analyze_stock(ticker, verbose=True):
@@ -850,14 +877,14 @@ def analyze_stock(ticker, verbose=True):
             sl_mult = 1 + sl_pct / 100
 
         if score >= 8:
-            trail = 2.5
+            trail_base = 2.5
         elif score >= 6:
-            trail = 3.0
+            trail_base = 3.0
         else:
-            trail = 4.0
+            trail_base = 4.0
 
-        trail += trail_adj
-        trail = max(1.0, min(trail, 6.0))
+        # >>> CORRECTIF : Trailing Stop toujours plus serré que le SL <<<
+        trail = compute_coherent_trailing(trail_base, trail_adj, sl_final)
 
         return {
             'ticker': ticker,
@@ -1009,9 +1036,9 @@ def analyze_etf(ticker):
             tp_mult = 1 - tp_pct / 100
             sl_mult = 1 + sl_pct / 100
 
-        trail = 3.0
-        trail += trail_adj
-        trail = max(1.0, min(trail, 6.0))
+        trail_base = 3.0
+        # >>> CORRECTIF : Trailing Stop toujours plus serré que le SL <<<
+        trail = compute_coherent_trailing(trail_base, trail_adj, sl_final)
 
         return {
             'ticker': ticker,
@@ -1067,8 +1094,8 @@ def get_verdict(confidence):
 def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     """
     Construit le message Telegram avec des niveaux de sortie corrects pour LONG et SHORT.
-    Pour un SHORT : le Trailing Stop est calculé avec trail_pct (plus serré que le SL).
-    Pour un LONG : le Trailing Stop est calculé avec trail_pct (inchangé).
+    Le Trailing Stop est désormais toujours calculé pour rester plus serré que le SL
+    (trail_pct <= sl_pct * 0.9), afin d'être cohérent dans les deux directions.
     """
     max_score = 7 if not is_etf else 5
     entry = data['price']
@@ -1087,7 +1114,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     else:  # SHORT
         tp = round(entry * (1 - tp_pct / 100), 2)
         sl = round(entry * (1 + sl_pct / 100), 2)
-        # Trailing Stop plus serré que le SL (utilise trail_pct)
+        # Trailing Stop plus serré que le SL (utilise trail_pct <= sl_pct * 0.9)
         trail_price = round(entry * (1 + trail_pct / 100), 2)
         gain_display = f"-{tp_pct:.1f}%"
         loss_display = f"+{sl_pct:.1f}%"
@@ -1143,7 +1170,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     else:  # SHORT
         msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} ({gain_display})\n"
         msg += f"   🛑 STOP LOSS: ${format_price(sl)} ({loss_display})\n"
-    # TRAILING (identique pour les deux directions)
+    # TRAILING (identique pour les deux directions, toujours plus serré que le SL)
     msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {trailing_display}\n"
     # R/R (toujours positif)
     if tp_pct > 0 and sl_pct > 0:
@@ -1272,7 +1299,7 @@ def main():
                     vwap = data.get('vwap', 'N/A')
                     poc = data.get('poc', 'N/A')
                     short_r = data.get('short_ratio', 'N/A')
-                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc} | Short: {short_r}")
+                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Trail: {data['trail_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc} | Short: {short_r}")
                 else:
                     print("    ❌")
 
@@ -1286,7 +1313,7 @@ def main():
                     vwap = data.get('vwap', 'N/A')
                     poc = data.get('poc', 'N/A')
                     short_r = data.get('short_ratio', 'N/A')
-                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc} | Short: {short_r}")
+                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}% | Trail: {data['trail_pct']}% | Inst: {inst}/10 | VWAP: {vwap} | POC: {poc} | Short: {short_r}")
                 else:
                     print("❌")
 
