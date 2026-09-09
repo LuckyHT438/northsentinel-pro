@@ -1222,21 +1222,21 @@ def main():
     # =========================================================
     # HORAIRES OPTIMISÉS POUR GITHUB ACTIONS
     # AM : 09:30 → 10:30 (60 min)  → 3 scans
-    # PM : 14:20 → 15:00 (40 min)  → 2 scans
-    # Total : 100 min/jour → 2000 min/mois (dans le quota)
+    # PM : 14:30 → 15:00 (30 min)  → 2 scans
+    # Total : 90 min/jour → 1800 min/mois (sous le quota)
     # =========================================================
     if 9 <= heure <= 10 and (heure < 10 or minute <= 30):
         session = "morning"
         start_hour, start_min = 9, 30
         end_hour, end_min = 10, 30
         print("☀️ Session MATIN (09:30-10:30) détectée.")
-    elif 14 <= heure <= 15 and (heure < 15 or minute <= 0):
+    elif 14 <= heure <= 15 and (heure == 14 and minute >= 30 or heure == 15 and minute == 0):
         session = "afternoon"
-        start_hour, start_min = 14, 20
+        start_hour, start_min = 14, 30
         end_hour, end_min = 15, 0
-        print("🌙 Session APRÈS-MIDI (14:20-15:00) détectée.")
+        print("🌙 Session APRÈS-MIDI (14:30-15:00) détectée.")
     else:
-        print("⏰ Hors des plages horaires (AM: 09:30-10:30, PM: 14:20-15:00) – Arrêt.")
+        print("⏰ Hors des plages horaires (AM: 09:30-10:30, PM: 14:30-15:00) – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
                 "🤖 <b>NorthSentinel CA Only</b>™\n"
