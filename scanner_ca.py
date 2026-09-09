@@ -9,31 +9,14 @@
 # SCAN TOUTES LES 30 MINUTES — CONVICTION AVEC BONUS POC
 # PRIORITY RANK POUR DÉPARTAGER LES SETUPS
 #
-# >>> CORRECTIF (2026-09-08) : cohérence du Trailing Stop <<<
-# Avant : trail_pct était calculé indépendamment de sl_pct (souvent > sl_pct),
-# ce qui plaçait le Trailing Stop AU-DELÀ du Stop Loss (des deux côtés,
-# LONG et SHORT) → le SL était toujours touché en premier, rendant le
-# Trailing Stop inatteignable/incohérent.
-# Après : trail_pct est systématiquement borné à une fraction de sl_final
-# (trail_pct <= sl_final * 0.9), pour garantir que le Trailing Stop reste
-# toujours plus serré (plus proche de l'entrée) que le Stop Loss dur,
-# dans les deux directions.
-#
-# >>> CORRECTIF (2026-09-08) : arrêt automatique à la fin de session <<<
-# Avant : le script attendait la prochaine cible (30 min) même après l'heure
-# de fin, ce qui retardait l'arrêt.
-# Après : si la prochaine cible est après l'heure de fin, le script s'arrête
-# immédiatement, sans attendre.
-#
-# >>> CORRECTIF (2026-09-09) : envoi du message de fin de session <<<
-# Ajout d'une fonction send_session_end_message() appelée à la fois
-# dans la condition de fin de session et dans le correctif d'arrêt immédiat,
-# pour garantir que le message Telegram de fin est toujours envoyé.
-#
-# >>> CORRECTIF (2026-09-08) : affichage de l'AUM pour les ETFs <<<
-# Ajout de l'AUM (Assets Under Management) sur la ligne VWAP/POC
-# des messages Telegram pour les ETFs.
+# >>> CORRECTIFS INTÉGRÉS <<<
+# - Trailing Stop cohérent (trail_pct <= sl_final * 0.9)
+# - Arrêt immédiat en fin de session
+# - Envoi du message de fin de session
+# - Sélection par paires opposées (stock + ETF) pour garantir
+#   un signal LONG et un signal SHORT dans chaque message.
 # ============================================================
+
 import requests
 import yfinance as yf
 import time
@@ -62,7 +45,6 @@ CONFIG = {
     "scan_interval_minutes": 30,
     "tickers": {
         "stocks": [
-            # === EXISTANTS (54) ===
             "MFC.TO", "GWO.TO", "POW.TO", "SU.TO", "CNQ.TO",
             "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI-B.TO",
@@ -78,34 +60,21 @@ CONFIG = {
             "KTN.V",
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
             "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO",
-
-            # === NOUVEAUX (24) ===
-            # Financiers
             "TD.TO", "CM.TO", "RY.TO",
-            # Énergie
             "ENB.TO", "ARX.TO", "VET.TO", "PPL.TO", "TRP.TO",
-            # Mines & matériaux
             "BTO.TO", "FNV.TO", "HBM.TO", "AGI.TO", "NCM.TO",
-            # Technologie / Infrastructure IA
             "SHOP.TO", "KEEL.TO",
-            # Industrie / Équipements tech
             "WN.TO", "HPS-A.TO",
-            # TSX-Venture
             "ARTG.V", "TOI.V", "QNC.V",
-
-            # === REMPLACEMENTS (7) ===
             "BTE.TO", "MEG.TO", "FR.TO", "SIL.TO", "EQB.TO", "TRI.TO", "GIL.TO"
         ],
         "etfs": [
-            # === EXISTANTS (27) ===
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
             "XMA.TO", "XIT.TO", "XST.TO", "XRE.TO", "XUT.TO",
             "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO", "HXS.TO",
             "HXQ.TO", "VFV.TO", "XQQ.TO", "HHL.TO", "TXF.TO",
             "HUTL.TO", "ZDI.TO", "VI.TO", "VRE.TO", "FIE.TO",
             "ZDC.TO", "ZWA.TO",
-
-            # === NOUVEAUX (15) ===
             "XIU.TO", "ZCN.TO", "HNU.TO", "HOU.TO", "ZUB.TO",
             "ZFL.TO", "DLR.TO", "ZWB.TO", "HXT.TO",
             "XSP.TO", "XEF.TO", "XEC.TO", "ZAG.TO"
@@ -177,7 +146,6 @@ def send_telegram(message):
         return False
 
 def send_session_end_message(now, session):
-    """Envoie un message Telegram indiquant la fin de la session."""
     session_label = "Morning" if session == "morning" else "Afternoon"
     msg = (
         f"🤖 <b>NorthSentinel CA Only</b>™\n"
@@ -190,7 +158,7 @@ def send_session_end_message(now, session):
     )
     send_telegram(msg)
 
-# ==================== JOURS FÉRIÉS ====================
+# ==================== JOURS FÉRIÉS ET EARLY CLOSE ====================
 def _adjust_weekend(d):
     if d.weekday() == 5:
         return d - timedelta(days=1)
@@ -205,12 +173,10 @@ def _build_ca_holidays(year):
     ca.add(date(year, 7, 1))
     ca.add(date(year, 12, 25))
     ca.add(date(year, 12, 26))
-    # Family Day (deuxième lundi de février)
     fam = date(year, 2, 1)
     while fam.weekday() != 0:
         fam = date(year, 2, fam.day + 1)
     ca.add(date(year, 2, fam.day + 14))
-    # Good Friday
     a = year % 19
     b = year // 100
     c = year % 100
@@ -227,22 +193,18 @@ def _build_ca_holidays(year):
     day = ((h + l - 7 * m + 114) % 31) + 1
     easter = date(year, month, day)
     ca.add(easter - timedelta(days=2))
-    # Victoria Day (lundi précédant le 25 mai)
     vic = date(year, 5, 24)
     while vic.weekday() != 0:
         vic = date(year, 5, vic.day - 1)
     ca.add(vic)
-    # Civic Holiday (premier lundi d'août)
     civ = date(year, 8, 1)
     while civ.weekday() != 0:
         civ = date(year, 8, civ.day + 1)
     ca.add(civ)
-    # Labour Day (premier lundi de septembre)
     lab = date(year, 9, 1)
     while lab.weekday() != 0:
         lab = date(year, 9, lab.day + 1)
     ca.add(lab)
-    # Canadian Thanksgiving (deuxième lundi d'octobre)
     thanks = date(year, 10, 1)
     while thanks.weekday() != 0:
         thanks = date(year, 10, thanks.day + 1)
@@ -258,13 +220,10 @@ def is_ca_market_closed(check_date):
     adjusted = {_adjust_weekend(d) for d in holidays}
     return check_date in adjusted
 
-# ==================== FERMETURES ANTICIPÉES (EARLY CLOSE) ====================
 def _build_early_close_dates(year):
     from datetime import date
     early_dates = {}
-    # 24 décembre
     early_dates[date(year, 12, 24)] = 13
-    # 31 décembre
     early_dates[date(year, 12, 31)] = 13
     return early_dates
 
@@ -346,11 +305,9 @@ def analyze_sentiment(title):
 
 # ==================== VWAP ET POC ====================
 def get_vwap_polygon(ticker):
-    """Récupère le VWAP via Polygon.io. Retourne None si erreur ou clé manquante."""
     if not POLYGON_API_KEY:
         return None
     try:
-        # Polygon utilise le format sans suffixe .TO pour les tickers canadiens
         clean_ticker = ticker.replace('.TO', '').replace('.V', '')
         url = f"https://api.polygon.io/v1/indicators/vwap/{clean_ticker}?timespan=minute&window=1&adjusted=true&apiKey={POLYGON_API_KEY}"
         r = requests.get(url, timeout=5)
@@ -358,14 +315,12 @@ def get_vwap_polygon(ticker):
             return None
         data = r.json()
         if 'results' in data and data['results'] and 'values' in data['results']:
-            # Le dernier VWAP est le plus récent
             return data['results']['values'][-1]['value']
         return None
     except:
         return None
 
 def get_poc_alphavantage(ticker):
-    """Récupère le POC via Alpha Vantage (Volume Profile simplifié). Retourne None si erreur ou clé manquante."""
     if not ALPHAVANTAGE_API_KEY:
         return None
     try:
@@ -378,36 +333,26 @@ def get_poc_alphavantage(ticker):
         if 'Time Series (1min)' not in data:
             return None
         time_series = data['Time Series (1min)']
-        # On calcule le POC comme le prix avec le plus gros volume sur la session
-        # On agrège les volumes par prix (approximation grossière)
         volume_by_price = {}
         for ts, values in time_series.items():
-            # On prend le prix de clôture comme représentatif
             price = float(values['4. close'])
             volume = float(values['5. volume'])
-            # Arrondir le prix à 2 décimales pour regrouper
             price_rounded = round(price, 2)
             volume_by_price[price_rounded] = volume_by_price.get(price_rounded, 0) + volume
         if not volume_by_price:
             return None
-        # Le POC est le prix avec le plus gros volume
         poc = max(volume_by_price, key=volume_by_price.get)
         return poc
     except:
         return None
 
 def get_vwap_poc(ticker):
-    """Retourne un tuple (vwap, poc) pour un ticker donné."""
     vwap = get_vwap_polygon(ticker)
     poc = get_poc_alphavantage(ticker)
     return vwap, poc
 
-# ==================== SCORE INSTITUTIONNEL (AVEC DÉTAILS) ====================
+# ==================== SCORE INSTITUTIONNEL ====================
 def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
-    """
-    Calcule un score d'intérêt institutionnel (0-10) basé sur des données disponibles pour le marché canadien.
-    Retourne (score, details) où details est un dictionnaire contenant les sous-composantes.
-    """
     score = 0
     details = {}
     held = info.get('heldPercentInstitutions', 0)
@@ -426,7 +371,6 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     details['gap'] = gap
     details['direction'] = direction
 
-    # 1. Taux de détention institutionnelle élevé
     if held >= 0.6:
         score += 2
         details['held_bonus'] = 2
@@ -436,14 +380,12 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     else:
         details['held_bonus'] = 0
 
-    # 2. Short squeeze potentiel : short ratio > 3 + gap haussier > 3% + direction LONG
     if short_ratio > 3 and direction == "LONG" and gap > 3:
         score += 2
         details['short_squeeze_bonus'] = 2
     else:
         details['short_squeeze_bonus'] = 0
 
-    # 3. Volume anormal + cassure SMA50 (institutions actives)
     if vol_ratio > 2 and sma50 and price > sma50:
         score += 2
         details['volume_sma_bonus'] = 2
@@ -453,7 +395,6 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     else:
         details['volume_sma_bonus'] = 0
 
-    # 4. Short ratio très élevé seul (intérêt baissier institutionnel)
     if short_ratio > 4 and direction == "SHORT":
         score += 1
         details['short_high_bonus'] = 1
@@ -464,33 +405,21 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     details['total'] = score
     return score, details
 
-# ==================== CONVICTION AVEC BONUS POC ====================
+# ==================== CONVICTION ET PRIORITY SCORE ====================
 def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_interest, market_bias, poc=None):
-    """
-    Calcule le niveau de conviction pour un setup LONG ou SHORT.
-    Retourne (label, emoji) : ("High", "🟢"), ("Moderate", "🔵"), ("Low", "🟡")
-    Le POC est un bonus optionnel : s'il est cohérent avec la direction, il ajoute +1 au compteur de feux verts.
-    """
     bias = market_bias.replace("⚪ ", "").replace("🟢 ", "").replace("🔴 ", "").strip()
-
-    # Initialisation des feux verts
     green_count = 0
 
     if direction == "LONG":
-        # Feu 1: Gap >= 3% ET volume >= 1.5
         if gap >= 3.0 and vol_ratio >= 1.5:
             green_count += 1
-        # Feu 2: VWAP disponible ET entry_price dans 0.5% du VWAP
         if vwap is not None and abs(entry_price - vwap) / vwap <= 0.005:
             green_count += 1
-        # Feu 3: Inst. Interest >= 7
         if inst_interest >= 7:
             green_count += 1
-        # Bonus POC : si POC disponible et entry_price >= POC (ou dans 1%)
         if poc is not None and entry_price >= poc * 0.99:
             green_count += 1
 
-        # Décision
         if green_count >= 4 and bias in ["Neutral", "Risk-on"]:
             return "High", "🟢"
         elif green_count >= 3 and bias in ["Neutral", "Risk-on"]:
@@ -499,20 +428,15 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
             return "Low", "🟡"
 
     elif direction == "SHORT":
-        # Feu 1: Gap <= -3% ET volume >= 1.5
         if gap <= -3.0 and vol_ratio >= 1.5:
             green_count += 1
-        # Feu 2: VWAP disponible ET entry_price est en dessous du VWAP avec marge >= 0.2%
         if vwap is not None and entry_price < vwap * 0.998:
             green_count += 1
-        # Feu 3: Inst. Interest >= 7
         if inst_interest >= 7:
             green_count += 1
-        # Bonus POC : si POC disponible et entry_price <= POC (ou dans 1%)
         if poc is not None and entry_price <= poc * 1.01:
             green_count += 1
 
-        # Décision
         if green_count >= 4 and bias in ["Neutral", "Risk-off"]:
             return "High", "🟢"
         elif green_count >= 3 and bias == "Neutral":
@@ -520,21 +444,13 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
         else:
             return "Low", "🟡"
 
-    # Fallback
     return "Low", "🟡"
 
-# ==================== PRIORITY RANK ====================
 def calculate_priority_score(data, market_bias, is_etf=False):
-    """
-    Calcule un score de priorité objectif (sur ~20) pour classer les setups.
-    Plus le score est élevé, plus le setup est prioritaire.
-    """
-    # 1. Verdict (Strong=3, Favorable=2, Mixed=1)
     verdict_text = get_verdict(data['confidence'])[0]
     verdict_map = {"Strong": 3, "Favorable": 2, "Mixed": 1}
     v_score = verdict_map.get(verdict_text, 1)
 
-    # 2. Conviction (High=3, Moderate=2, Low=1)
     conv_label, _ = calculate_conviction(
         data['direction'], data['gap'], data['vol_ratio'],
         data.get('vwap'), data['price'], data['inst_interest'],
@@ -543,20 +459,16 @@ def calculate_priority_score(data, market_bias, is_etf=False):
     conv_map = {"High": 3, "Moderate": 2, "Low": 1}
     c_score = conv_map.get(conv_label, 1)
 
-    # 3. Quality (score normalisé)
     max_score = 7 if not is_etf else 5
     q_score = data['score'] / max_score
 
-    # 4. Gap (capé à 10 %)
     gap_score = min(abs(data['gap']), 10.0) / 10.0
 
-    # 5. VWAP (distance en %, max 5 %)
     vwap_score = 0.0
     if data.get('vwap') is not None and data['vwap'] > 0:
         diff_pct = abs(data['price'] - data['vwap']) / data['vwap'] * 100
         vwap_score = max(0.0, 1.0 - (diff_pct / 5.0))
 
-    # 6. Market Bias (direction alignée ?)
     bias_score = 0.0
     clean_bias = market_bias.replace("⚪ ", "").replace("🟢 ", "").replace("🔴 ", "").strip()
     if data['direction'] == "LONG" and clean_bias == "Risk-on":
@@ -565,9 +477,7 @@ def calculate_priority_score(data, market_bias, is_etf=False):
         bias_score = 0.5
     elif (data['direction'] == "LONG" and clean_bias == "Risk-off") or (data['direction'] == "SHORT" and clean_bias == "Risk-on"):
         bias_score = -0.5
-    # Neutral reste 0
 
-    # Total (sur ~20.5)
     total = (v_score * 2.5) + (c_score * 2.5) + (q_score * 2.0) + (gap_score * 1.5) + (vwap_score * 1.5) + bias_score
     return round(total, 2)
 
@@ -614,82 +524,54 @@ def get_confidence_score(score, vol_ratio, gap, cap_category):
         conf += 0.5
     return min(round(conf, 1), 10.0)
 
-# ==================== GESTION DES RISQUES DYNAMIQUE AVEC INSTITUTIONS ====================
+# ==================== GESTION DES RISQUES ====================
 def adjust_risk_with_factors(base_tp_pct, base_sl_pct, spread_pct, vol_ratio, cap_category, gap, held_pct):
-    """
-    Ajuste le TP, le SL et le Trailing en fonction des facteurs de marché.
-    Retourne (tp_pct, sl_pct, trail_adj) où trail_adj est un ajustement en pourcentage à ajouter au trailing.
-    """
     tp_pct = base_tp_pct
     sl_pct = base_sl_pct
     trail_adj = 0.0
 
-    # 1. Spread
     if spread_pct > 0.5:
         sl_pct += 0.2
 
-    # 2. Volume relatif
     if vol_ratio > 2.0:
         sl_pct -= 0.3
         tp_pct += 0.5
     elif vol_ratio < 0.5:
         sl_pct += 0.3
 
-    # 3. Capitalisation
     if cap_category in ["Micro Cap", "Small Cap"]:
         sl_pct += 0.5
         tp_pct += 1.0
     elif cap_category in ["Large Cap", "Mega Cap"]:
         sl_pct -= 0.2
 
-    # 4. Gap
     if abs(gap) > 10:
         tp_pct += 0.5
 
-    # 5. Taux de détention institutionnelle
     if held_pct >= 0.6:
-        sl_pct -= 0.2      # plus serré
-        tp_pct -= 0.5      # moins ambitieux
-        trail_adj -= 0.5   # trailing plus serré
+        sl_pct -= 0.2
+        tp_pct -= 0.5
+        trail_adj -= 0.5
     elif held_pct <= 0.2:
-        sl_pct += 0.3      # plus large
-        tp_pct += 1.0      # plus ambitieux
-        trail_adj += 1.0   # trailing plus large
+        sl_pct += 0.3
+        tp_pct += 1.0
+        trail_adj += 1.0
 
-    # Bornes de sécurité
     sl_pct = max(0.5, min(sl_pct, 3.0))
     tp_pct = max(0.5, min(tp_pct, 8.0))
-
     return round(tp_pct, 2), round(sl_pct, 2), round(trail_adj, 2)
 
 def apply_risk_mandate(tp_pct, sl_pct, min_ratio=2.0):
-    """
-    Garantit un ratio R/R ≥ min_ratio (ex: 2:1).
-    Retourne (tp_pct, sl_pct) ajustés.
-    """
     required_tp = sl_pct * min_ratio
     if tp_pct < required_tp:
         tp_pct = round(required_tp, 2)
-
     if sl_pct < 0.5:
         sl_pct = 0.5
-
     tp_pct = min(tp_pct, 8.0)
     sl_pct = min(sl_pct, 3.0)
-
     return round(tp_pct, 2), round(sl_pct, 2)
 
 def compute_coherent_trailing(base_trail, trail_adj, sl_final):
-    """
-    >>> CORRECTIF <<<
-    Calcule un Trailing Stop toujours cohérent avec le Stop Loss :
-    le Trailing Stop doit rester PLUS SERRÉ (plus proche de l'entrée)
-    que le Stop Loss dur, sinon le SL est systématiquement touché en
-    premier et le Trailing Stop devient inatteignable / incohérent
-    (bug observé sur les SHORT, mais présent aussi côté LONG).
-
-    Règle : trail_pct <= sl_final * 0.9, avec un plancher de 0.3%.
-    """
     trail = base_trail + trail_adj
     trail = max(1.0, min(trail, 6.0))
     trail = min(trail, sl_final * 0.9)
@@ -728,7 +610,7 @@ def analyze_stock(ticker, verbose=True):
 
         gap = ((price - prev_close) / prev_close) * 100
 
-        # === SCORING ===
+        # SCORING
         score = 0
         criteres = {}
 
@@ -832,11 +714,9 @@ def analyze_stock(ticker, verbose=True):
                 print(f"  ❌ Score {score} < {SCORE_MIN_STOCKS}")
             return None
 
-        # === CALCUL DU SCORE INSTITUTIONNEL ===
         inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
 
         if verbose:
-            # Label du score
             if inst_score >= 7:
                 inst_label = "High"
             elif inst_score >= 4:
@@ -860,14 +740,12 @@ def analyze_stock(ticker, verbose=True):
                 print(f"       - Short Ratio: {inst_details['short_ratio']:.1f} (>4) → +1")
             print(f"       - Total: {inst_score}/10")
 
-        # === RÉCUPÉRATION VWAP/POC ===
         vwap, poc = get_vwap_poc(ticker)
         if vwap is not None:
             vwap = round(vwap, 2)
         if poc is not None:
             poc = round(poc, 2)
 
-        # === CALCUL DES TP/SL ===
         cap_category = get_market_cap_category(ticker)
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, cap_category)
@@ -894,7 +772,6 @@ def analyze_stock(ticker, verbose=True):
 
         tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, min_ratio=2.0)
 
-        # Stockage des pourcentages
         tp_pct = tp_final
         sl_pct = sl_final
 
@@ -912,7 +789,6 @@ def analyze_stock(ticker, verbose=True):
         else:
             trail_base = 4.0
 
-        # >>> CORRECTIF : Trailing Stop toujours plus serré que le SL <<<
         trail = compute_coherent_trailing(trail_base, trail_adj, sl_final)
 
         return {
@@ -985,7 +861,7 @@ def analyze_etf(ticker):
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
         aum = info.get('totalAssets', 0) or info.get('assetsUnderManagement', 0)
 
-        # === SCORING ETF ===
+        # SCORING ETF
         score = 0
         if 0.5 <= gap <= 8:
             direction = "LONG"
@@ -1021,20 +897,16 @@ def analyze_etf(ticker):
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
 
-        # === SCORE INSTITUTIONNEL ===
         inst_score, _ = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
 
-        # === VWAP/POC ===
         vwap, poc = get_vwap_poc(ticker)
         if vwap is not None:
             vwap = round(vwap, 2)
         if poc is not None:
             poc = round(poc, 2)
 
-        # === Récupération du Short Ratio (si disponible) ===
         short_ratio = info.get('shortRatio', None)
 
-        # === CALCUL DES TP/SL ===
         if abs(gap) >= 6:
             tp_brut = 1.5 + (score - 3) * 0.5
         elif abs(gap) >= 3:
@@ -1054,7 +926,6 @@ def analyze_etf(ticker):
 
         tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, min_ratio=2.0)
 
-        # Stockage des pourcentages
         tp_pct = tp_final
         sl_pct = sl_final
 
@@ -1066,7 +937,6 @@ def analyze_etf(ticker):
             sl_mult = 1 + sl_pct / 100
 
         trail_base = 3.0
-        # >>> CORRECTIF : Trailing Stop toujours plus serré que le SL <<<
         trail = compute_coherent_trailing(trail_base, trail_adj, sl_final)
 
         return {
@@ -1108,9 +978,6 @@ def calculate_quantity(entry, stop, capital, risk_pct, max_cap_pct):
 def format_price(p):
     return f"{p:.2f}"
 
-# ============================================================
-# VERDICT SIMPLIFIÉ (Weak et Poor supprimés)
-# ============================================================
 def get_verdict(confidence):
     if confidence >= 8.5:
         return "Strong", "🟢"
@@ -1119,14 +986,7 @@ def get_verdict(confidence):
     else:
         return "Mixed", "🟡"
 
-# ============================================================
 def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
-    """
-    Construit le message Telegram avec des niveaux de sortie corrects pour LONG et SHORT.
-    Le Trailing Stop est désormais toujours calculé pour rester plus serré que le SL
-    (trail_pct <= sl_pct * 0.9), afin d'être cohérent dans les deux directions.
-    Pour les ETFs, l'AUM est affiché sur la ligne VWAP/POC.
-    """
     max_score = 7 if not is_etf else 5
     entry = data['price']
     direction = data['direction']
@@ -1141,10 +1001,9 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
         gain_display = f"+{tp_pct:.1f}%"
         loss_display = f"-{sl_pct:.1f}%"
         trailing_display = f"{trail_pct:.1f}%"
-    else:  # SHORT
+    else:
         tp = round(entry * (1 - tp_pct / 100), 2)
         sl = round(entry * (1 + sl_pct / 100), 2)
-        # Trailing Stop plus serré que le SL (utilise trail_pct <= sl_pct * 0.9)
         trail_price = round(entry * (1 + trail_pct / 100), 2)
         gain_display = f"-{tp_pct:.1f}%"
         loss_display = f"+{sl_pct:.1f}%"
@@ -1176,7 +1035,6 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     short_ratio = data.get('short_ratio')
     short_display = f"{short_ratio:.1f}" if short_ratio is not None else "N/A"
 
-    # Conviction avec bonus POC
     conv_label, conv_emoji = calculate_conviction(
         direction, data['gap'], data['vol_ratio'], data.get('vwap'), entry, inst, bias, data.get('poc')
     )
@@ -1185,7 +1043,6 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     msg += f"   Direction: <b>{direction_emoji}</b>\n"
     msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
     msg += f"   GAP: {gap_display} | Volume: x{data['vol_ratio']:.2f} | Short ratio: {short_display}\n"
-    # VWAP, POC et (pour ETF) AUM
     msg += f"   VWAP: {vwap_display} | POC: {poc_display}"
     if is_etf and data.get('aum_m') is not None:
         msg += f" | AUM: {data['aum_m']:.1f}M$"
@@ -1200,12 +1057,10 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     if direction == "LONG":
         msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} ({gain_display})\n"
         msg += f"   🛑 STOP LOSS: ${format_price(sl)} ({loss_display})\n"
-    else:  # SHORT
+    else:
         msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} ({gain_display})\n"
         msg += f"   🛑 STOP LOSS: ${format_price(sl)} ({loss_display})\n"
-    # TRAILING (identique pour les deux directions, toujours plus serré que le SL)
     msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {trailing_display}\n"
-    # R/R (toujours positif)
     if tp_pct > 0 and sl_pct > 0:
         rr = tp_pct / sl_pct
         msg += f"   📊 R/R: {tp_pct:.1f} / {sl_pct:.1f} = {rr:.1f}:1\n"
@@ -1302,7 +1157,6 @@ def main():
 
     while True:
         now = datetime.now(MONTREAL_TZ)
-        # Vérifier si on a dépassé l'heure de fin
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
             send_session_end_message(now, session)
@@ -1341,49 +1195,90 @@ def main():
                 else:
                     print("❌")
 
-            best_stock = max(stocks_results, key=lambda x: (x['score'], x['vol_ratio'])) if stocks_results else None
-            best_etf = max(etfs_results, key=lambda x: (x['score'], x['vol_ratio'])) if etfs_results else None
+            # ---- SÉLECTION DES PAIRES OPPOSÉES ----
+            stock_long = [s for s in stocks_results if s['direction'] == 'LONG']
+            stock_short = [s for s in stocks_results if s['direction'] == 'SHORT']
+            etf_long = [e for e in etfs_results if e['direction'] == 'LONG']
+            etf_short = [e for e in etfs_results if e['direction'] == 'SHORT']
 
-            # === CLASSEMENT DES SETUPS AVEC PRIORITY RANK ===
-            setups = []
-            if best_stock:
-                setups.append({'data': best_stock, 'is_etf': False})
-            if best_etf:
-                setups.append({'data': best_etf, 'is_etf': True})
+            def get_best(candidates, is_etf):
+                if not candidates:
+                    return None
+                scored = []
+                for cand in candidates:
+                    ps = calculate_priority_score(cand, "⚪ Neutral", is_etf)
+                    scored.append((ps, cand))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                return scored[0][1]
 
-            if len(setups) == 2:
-                s1 = calculate_priority_score(setups[0]['data'], "⚪ Neutral", setups[0]['is_etf'])
-                s2 = calculate_priority_score(setups[1]['data'], "⚪ Neutral", setups[1]['is_etf'])
-                if s1 >= s2:
-                    setups[0]['rank'] = "1/2"
-                    setups[1]['rank'] = "2/2"
-                else:
-                    setups[0]['rank'] = "2/2"
-                    setups[1]['rank'] = "1/2"
-            elif len(setups) == 1:
-                setups[0]['rank'] = "1/1"
+            best_stock_long = get_best(stock_long, False)
+            best_stock_short = get_best(stock_short, False)
+            best_etf_long = get_best(etf_long, True)
+            best_etf_short = get_best(etf_short, True)
+
+            possible_pairs = []
+            if best_stock_long and best_etf_short:
+                possible_pairs.append((best_stock_long, best_etf_short))  # stock LONG, etf SHORT
+            if best_stock_short and best_etf_long:
+                possible_pairs.append((best_stock_short, best_etf_long))  # stock SHORT, etf LONG
+
+            selected_stock = None
+            selected_etf = None
+
+            if possible_pairs:
+                best_pair = None
+                best_score = -float('inf')
+                for stock_setup, etf_setup in possible_pairs:
+                    score_stock = calculate_priority_score(stock_setup, "⚪ Neutral", False)
+                    score_etf = calculate_priority_score(etf_setup, "⚪ Neutral", True)
+                    total = score_stock + score_etf
+                    if total > best_score:
+                        best_score = total
+                        best_pair = (stock_setup, etf_setup)
+                selected_stock, selected_etf = best_pair
             else:
-                setups = []
-
-            if setups:
-                msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
-                msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution. </i>\n"
-                msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
-                msg += f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
-                msg += "═══════════════════════════════════\n"
-
-                for setup in setups:
-                    if not setup['is_etf']:
-                        msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
+                # Aucune paire opposée : on prend le meilleur setup global
+                all_setups = []
+                for s in stocks_results:
+                    all_setups.append((s, False))
+                for e in etfs_results:
+                    all_setups.append((e, True))
+                if all_setups:
+                    scored = []
+                    for data, is_etf in all_setups:
+                        ps = calculate_priority_score(data, "⚪ Neutral", is_etf)
+                        scored.append((ps, data, is_etf))
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    best_data, best_is_etf = scored[0][1], scored[0][2]
+                    if best_is_etf:
+                        selected_etf = best_data
                     else:
-                        msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
-                    msg += build_setup_message(setup['data'], is_etf=setup['is_etf'], bias="⚪ Neutral", rank=setup['rank'])
+                        selected_stock = best_data
 
-                msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                msg += "<i>Informational automated signal. Not financial or trading advice. </i>"
-                send_telegram(msg)
+            # Construction du message
+            msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
+            msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
+            msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
+            msg += f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
+            msg += "═══════════════════════════════════\n"
+
+            msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
+            if selected_stock:
+                rank = "1/2" if selected_etf else "1/1"
+                msg += build_setup_message(selected_stock, is_etf=False, bias="⚪ Neutral", rank=rank)
             else:
-                print("ℹ️ Aucun setup valide – Pas de message Telegram.")
+                msg += "   <i>Aucun setup STOCK valide trouvé.</i>\n"
+
+            msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
+            if selected_etf:
+                rank = "2/2" if selected_stock else "1/1"
+                msg += build_setup_message(selected_etf, is_etf=True, bias="⚪ Neutral", rank=rank)
+            else:
+                msg += "   <i>Aucun setup ETF valide trouvé.</i>\n"
+
+            msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
+            send_telegram(msg)
 
         # Calcul de la prochaine cible
         next_min = ((current_min // SCAN_INTERVAL) + 1) * SCAN_INTERVAL
@@ -1392,7 +1287,6 @@ def main():
             next_min = 0
             next_hour += 1
 
-        # >>> CORRECTIF : si la prochaine cible est après la fin, on arrête immédiatement
         if next_hour > end_hour or (next_hour == end_hour and next_min > end_min):
             print(f"⏹️ Prochaine cible après la fin de session – Arrêt immédiat.")
             send_session_end_message(now, session)
