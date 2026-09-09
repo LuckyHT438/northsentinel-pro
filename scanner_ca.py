@@ -3,6 +3,11 @@
 # SHORTS + LONGS — 3 SOURCES DE NEWS
 # VERSION FINALE AVEC SYNTHETIC L2 (INTERNE) + PAIRES OPPOSÉES CONDITIONNELLES
 #
+# HORAIRES OPTIMISÉS POUR GITHUB ACTIONS :
+# AM : 09:30 → 10:30 (60 min)  → 3 scans
+# PM : 14:20 → 15:00 (40 min)  → 2 scans
+# Total : 100 min/jour → 2000 min/mois (dans le quota)
+#
 # SYNTHETIC L2 : utilisé UNIQUEMENT pour le Priority Rank et la conviction.
 # Aucun affichage dans le message Telegram.
 #
@@ -58,17 +63,14 @@ CONFIG = {
         "medium_window": 15,
         "max_candidates_stocks": 12,
         "max_candidates_etfs": 8,
-        # Seuils de confirmation (score L2 0-100)
         "strong_threshold": 75,
         "supportive_threshold": 60,
         "neutral_threshold": 40,
         "weak_threshold": 25,
-        # Bonus/Pénalités
         "bonus_strong": 3.0,
         "bonus_supportive": 1.5,
         "penalty_weak": -2.0,
         "penalty_bad": -4.0,
-        # Seuil pour accepter une paire opposée
         "priority_threshold_for_pair": 12.0
     },
 
@@ -686,7 +688,6 @@ def calculate_priority_score(data, market_bias, is_etf=False):
     elif (data["direction"] == "LONG" and clean_bias == "Risk-off") or (data["direction"] == "SHORT" and clean_bias == "Risk-on"):
         bias_score = -0.5
 
-    # Composante Synthetic L2 (bonus/pénalité non linéaire)
     l2_component = l2_confirmation_bonus(l2_score)
 
     total = (v_score * 2.5) + (c_score * 2.5) + (q_score * 2.0) + (gap_score * 1.5) + (vwap_score * 1.5) + bias_score + l2_component
@@ -1144,7 +1145,6 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     short_ratio = data.get("short_ratio")
     short_display = f"{short_ratio:.1f}" if short_ratio is not None else "N/A"
 
-    # Conviction (utilise le L2 en interne, sans l'afficher)
     l2_score = data.get("synthetic_l2_score", 50)
     conv_label, conv_emoji = calculate_conviction(
         direction, data["gap"], data["vol_ratio"], data.get("vwap"), entry, inst,
@@ -1219,22 +1219,24 @@ def main():
     if early_close:
         print(f"⚠️ Fermeture anticipée – Marché ferme à {early_hour}:00 ET.")
 
-    if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
+    # =========================================================
+    # HORAIRES OPTIMISÉS POUR GITHUB ACTIONS
+    # AM : 09:30 → 10:30 (60 min)  → 3 scans
+    # PM : 14:20 → 15:00 (40 min)  → 2 scans
+    # Total : 100 min/jour → 2000 min/mois (dans le quota)
+    # =========================================================
+    if 9 <= heure <= 10 and (heure < 10 or minute <= 30):
         session = "morning"
         start_hour, start_min = 9, 30
-        end_hour, end_min = 11, 30
-        print("☀️ Session MATIN détectée.")
-    elif 13 <= heure <= 15 and (heure < 15 or minute <= 30):
+        end_hour, end_min = 10, 30
+        print("☀️ Session MATIN (09:30-10:30) détectée.")
+    elif 14 <= heure <= 15 and (heure < 15 or minute <= 0):
         session = "afternoon"
-        start_hour, start_min = 13, 0
-        if early_close and early_hour is not None:
-            end_hour = early_hour
-            end_min = 0
-        else:
-            end_hour, end_min = 15, 30
-        print("🌙 Session APRÈS-MIDI détectée.")
+        start_hour, start_min = 14, 20
+        end_hour, end_min = 15, 0
+        print("🌙 Session APRÈS-MIDI (14:20-15:00) détectée.")
     else:
-        print("⏰ Hors des plages horaires.")
+        print("⏰ Hors des plages horaires (AM: 09:30-10:30, PM: 14:20-15:00) – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
                 "🤖 <b>NorthSentinel CA Only</b>™\n"
@@ -1340,11 +1342,9 @@ def main():
             selected_etf = None
 
             if possible_pairs:
-                # Choisir la paire avec la somme de scores la plus élevée
                 best_pair = max(possible_pairs, key=lambda x: x[2])
                 selected_stock, selected_etf = best_pair[0], best_pair[1]
             else:
-                # Fallback : meilleur global de chaque catégorie
                 all_stocks = [s for s in stocks_results]
                 all_etfs = [e for e in etfs_results]
                 selected_stock = get_best(all_stocks, False)
