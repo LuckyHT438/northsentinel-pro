@@ -25,6 +25,11 @@
 # Après : si la prochaine cible est après l'heure de fin, le script s'arrête
 # immédiatement, sans attendre.
 #
+# >>> CORRECTIF (2026-09-09) : envoi du message de fin de session <<<
+# Ajout d'une fonction send_session_end_message() appelée à la fois
+# dans la condition de fin de session et dans le correctif d'arrêt immédiat,
+# pour garantir que le message Telegram de fin est toujours envoyé.
+#
 # >>> CORRECTIF (2026-09-08) : affichage de l'AUM pour les ETFs <<<
 # Ajout de l'AUM (Assets Under Management) sur la ligne VWAP/POC
 # des messages Telegram pour les ETFs.
@@ -170,6 +175,20 @@ def send_telegram(message):
     except Exception as e:
         print(f"❌ Exception Telegram: {e}")
         return False
+
+def send_session_end_message(now, session):
+    """Envoie un message Telegram indiquant la fin de la session."""
+    session_label = "Morning" if session == "morning" else "Afternoon"
+    msg = (
+        f"🤖 <b>NorthSentinel CA Only</b>™\n"
+        f"<i>{session_label} Session ended – {now.strftime('%H:%M')} (ET)</i>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🛑 Automatic shutdown completed.\n"
+        "⏳ Next session will start at the scheduled time.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<i>Informational automated signal. Not financial or trading advice.</i>"
+    )
+    send_telegram(msg)
 
 # ==================== JOURS FÉRIÉS ====================
 def _adjust_weekend(d):
@@ -1286,17 +1305,7 @@ def main():
         # Vérifier si on a dépassé l'heure de fin
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session atteinte ({end_hour:02d}:{end_min:02d}) – Arrêt.")
-            session_label = "Morning" if session == "morning" else "Afternoon"
-            msg = (
-                f"🤖 <b>NorthSentinel CA Only</b>™\n"
-                f"<i>{session_label} Session ended – {now.strftime('%H:%M')} (ET)</i>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "🛑 Automatic shutdown completed.\n"
-                "⏳ Next session will start at the scheduled time.\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Informational automated signal. Not financial or trading advice.</i>"
-            )
-            send_telegram(msg)
+            send_session_end_message(now, session)
             break
 
         current_hour, current_min = now.hour, now.minute
@@ -1386,6 +1395,7 @@ def main():
         # >>> CORRECTIF : si la prochaine cible est après la fin, on arrête immédiatement
         if next_hour > end_hour or (next_hour == end_hour and next_min > end_min):
             print(f"⏹️ Prochaine cible après la fin de session – Arrêt immédiat.")
+            send_session_end_message(now, session)
             break
 
         wait_until_target(next_hour, next_min)
