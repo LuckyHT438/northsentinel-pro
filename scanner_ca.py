@@ -13,7 +13,8 @@
 # PRIORITY RANK intègre un bonus/pénalité non linéaire basé sur le score L2.
 #
 # SÉLECTION : paire stock/ETF de directions opposées si les deux setups ont
-# un Priority Score ≥ SEUIL_PRIORITY. Sinon, meilleur setup global.
+# un Priority Score ≥ SEUIL_PRIORITY. Sinon, UN SEUL setup (le meilleur global).
+# JAMAIS deux setups de même direction dans un message Telegram.
 # ============================================================
 
 import requests
@@ -85,7 +86,7 @@ CONFIG = {
             "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO",
             "BNS.TO",
             "ATZ.TO", "GRGD.TO", "SPCX.TO", "ATD.TO",
-            "MRU.TO", "L.TO", "EMP.A.TO", "CP.TO", "CNR.TO",
+            "MRU.TO", "L.TO", "EMP-A.TO", "CP.TO", "CNR.TO",
             "TFII.TO", "MDA.TO", "BBD-B.TO", "CGO.TO", "QBR-B.TO",
             "IFC.TO", "SLF.TO", "RBA.TO",
             "NA.TO",
@@ -108,7 +109,7 @@ CONFIG = {
             "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO", "HXS.TO",
             "HXQ.TO", "VFV.TO", "XQQ.TO", "HHL.TO", "TXF.TO",
             "HUTL.TO", "ZDI.TO", "VI.TO", "VRE.TO", "FIE.TO",
-            "ZDC.TO", "ZWA.TO",
+            "ZDC.V", "ZWA.TO",
             "XIU.TO", "ZCN.TO", "HNU.TO", "HOU.TO", "ZUB.TO",
             "ZFL.TO", "DLR.TO", "ZWB.TO", "HXT.TO",
             "XSP.TO", "XEF.TO", "XEC.TO", "ZAG.TO"
@@ -1338,10 +1339,26 @@ def main():
                 best_pair = max(possible_pairs, key=lambda x: x[2])
                 selected_stock, selected_etf = best_pair[0], best_pair[1]
             else:
-                all_stocks = [s for s in stocks_results]
-                all_etfs = [e for e in etfs_results]
-                selected_stock = get_best(all_stocks, False)
-                selected_etf = get_best(all_etfs, True)
+                # ---- FALLBACK : UN SEUL setup (le meilleur global, toutes catégories confondues) ----
+                all_candidates = []
+                for s in stocks_results:
+                    all_candidates.append((s, False))
+                for e in etfs_results:
+                    all_candidates.append((e, True))
+
+                best_setup = None
+                best_score = -float('inf')
+                for cand, is_etf in all_candidates:
+                    ps = calculate_priority_score(cand, "⚪ Neutral", is_etf)
+                    if ps > best_score:
+                        best_score = ps
+                        best_setup = (cand, is_etf)
+
+                if best_setup:
+                    if best_setup[1]:
+                        selected_etf = best_setup[0]
+                    else:
+                        selected_stock = best_setup[0]
 
             # ---- MESSAGE TELEGRAM ----
             msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
