@@ -15,6 +15,13 @@
 # SÉLECTION : paire stock/ETF de directions opposées si les deux setups ont
 # un Priority Score ≥ SEUIL_PRIORITY. Sinon, UN SEUL setup (le meilleur global).
 # JAMAIS deux setups de même direction dans un message Telegram.
+#
+# >>> CORRECTIFS ASYMÉTRIQUES SHORT (Recommandations 2 et 3) <<<
+# - SL des SHORTs élargi (+0.4%) — les baisses sont plus volatiles
+# - TP ajusté pour préserver R/R ≥ 2:1
+# - Gap minimum SHORT renforcé (-2% → -2.5%)
+# - Vol_ratio minimum SHORT renforcé (0.8 → 0.9)
+# - ETFs SHORT : gap minimum renforcé (-0.5% → -0.75%)
 # ============================================================
 
 import requests
@@ -76,6 +83,17 @@ CONFIG = {
         "penalty_weak": -2.0,
         "penalty_bad": -4.0,
         "priority_threshold_for_pair": 12.0
+    },
+
+    # ========================================================
+    # CORRECTIFS ASYMÉTRIQUES SHORT (Recommandations 2 et 3)
+    # ========================================================
+    "short_adjustment": {
+        "sl_widening_pct": 0.4,       # +0.4% sur le SL des SHORTs (Recommandation 3)
+        "trail_widening_pct": 0.2,    # +0.2% sur le trailing des SHORTs
+        "gap_min_short": -2.5,        # Gap minimum SHORT renforcé (Recommandation 2)
+        "vol_ratio_min_short": 0.9,   # Vol_ratio minimum SHORT renforcé
+        "etf_gap_min_short": -0.75    # Gap minimum SHORT des ETFs renforcé
     },
 
     "tickers": {
@@ -145,6 +163,14 @@ SCAN_INTERVAL = CONFIG["scan_interval_minutes"]
 STOCK_TICKERS = CONFIG["tickers"]["stocks"]
 ETF_TICKERS = CONFIG["tickers"]["etfs"]
 SYNTHETIC_L2_CONFIG = CONFIG["synthetic_l2"]
+
+# --- Correctifs SHORT (Recommandations 2 et 3) ---
+SHORT_ADJ = CONFIG["short_adjustment"]
+SHORT_SL_WIDENING = SHORT_ADJ["sl_widening_pct"]
+SHORT_TRAIL_WIDENING = SHORT_ADJ["trail_widening_pct"]
+SHORT_GAP_MIN = SHORT_ADJ["gap_min_short"]
+SHORT_VOL_MIN = SHORT_ADJ["vol_ratio_min_short"]
+SHORT_ETF_GAP_MIN = SHORT_ADJ["etf_gap_min_short"]
 
 RSS_FEEDS = [
     "https://www.cbc.ca/webfeed/rss/rss-business",
@@ -814,21 +840,31 @@ def analyze_stock(ticker, verbose=True):
         gap = ((price - prev_close) / prev_close) * 100
 
         score = 0
+        # === FILTRE GAP ASYMÉTRIQUE (Recommandation 2) ===
         if 2 <= gap <= 40:
             direction = "LONG"
             score += 1
-        elif -40 <= gap <= -2:
+        elif -40 <= gap <= SHORT_GAP_MIN:
             direction = "SHORT"
             score += 1
         else:
             if verbose:
                 print(f"  ❌ Gap {gap:.2f}% hors plage", flush=True)
             return None
+
         volume = info.get("volume", 0)
         avg_vol = info.get("averageVolume", volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
-        if vol_ratio > 0.8:
+
+        # === FILTRE VOLUME ASYMÉTRIQUE (Recommandation 2) ===
+        vol_threshold = SHORT_VOL_MIN if direction == "SHORT" else 0.8
+        if vol_ratio > vol_threshold:
             score += 1
+        else:
+            if verbose and direction == "SHORT":
+                print(f"  ❌ SHORT: vol_ratio {vol_ratio:.2f} < {SHORT_VOL_MIN}", flush=True)
+            return None if direction == "SHORT" else None
+
         float_shares = info.get("floatShares")
         if float_shares is not None and float_shares < 100_000_000:
             score += 1
@@ -892,7 +928,14 @@ def analyze_stock(ticker, verbose=True):
             tp_brut = 0.5 + (score - 4) * 0.2
         sl_brut = 2.0 if score >= 6 else 2.5
         tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(tp_brut, sl_brut, spread_pct, vol_ratio, cap_category, gap, held_pct)
+
+        # === ÉLARGISSEMENT ASYMÉTRIQUE DU SL SHORT (Recommandation 3) ===
+        if direction == "SHORT":
+            sl_adj += SHORT_SL_WIDENING
+            trail_adj += SHORT_TRAIL_WIDENING
+
         tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, 2.0)
+
         if direction == "LONG":
             tp_mult = 1 + tp_final / 100
             sl_mult = 1 - sl_final / 100
@@ -957,10 +1000,11 @@ def analyze_etf(ticker):
         aum = info.get("totalAssets", 0) or info.get("assetsUnderManagement", 0)
 
         score = 0
+        # === FILTRE GAP ASYMÉTRIQUE ETF (Recommandation 2) ===
         if 0.5 <= gap <= 8:
             direction = "LONG"
             score += 1
-        elif -8 <= gap <= -0.5:
+        elif -8 <= gap <= SHORT_ETF_GAP_MIN:
             direction = "SHORT"
             score += 1
         else:
@@ -1002,7 +1046,14 @@ def analyze_etf(ticker):
         sl_brut = 2.0
         held_pct = info.get("heldPercentInstitutions", 0.5) or 0.5
         tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(tp_brut, sl_brut, spread_pct, vol_ratio, "Large Cap", gap, held_pct)
+
+        # === ÉLARGISSEMENT ASYMÉTRIQUE DU SL SHORT (Recommandation 3) ===
+        if direction == "SHORT":
+            sl_adj += SHORT_SL_WIDENING
+            trail_adj += SHORT_TRAIL_WIDENING
+
         tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, 2.0)
+
         if direction == "LONG":
             tp_mult = 1 + tp_final / 100
             sl_mult = 1 - sl_final / 100
@@ -1393,14 +1444,12 @@ def main():
                 break
 
         if next_scan_time is None:
-            # Plus de scan programmé → attendre la fin de session (vérifiée au prochain tour de boucle)
             print("⏳ Plus aucun scan programmé – Attente de la fin de session.", flush=True)
             time.sleep(60)
             continue
 
         target_hour, target_min = next_scan_time
 
-        # Si le prochain scan est après la fin, on s'arrête
         if target_hour > end_hour or (target_hour == end_hour and target_min > end_min):
             print("⏹️ Prochaine cible après la fin de session – Arrêt.", flush=True)
             send_session_end_message(now, session)
