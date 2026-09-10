@@ -3,10 +3,10 @@
 # SHORTS + LONGS — 3 SOURCES DE NEWS
 # VERSION FINALE AVEC SYNTHETIC L2 (INTERNE) + PAIRES OPPOSÉES CONDITIONNELLES
 #
-# HORAIRES OPTIMISÉS POUR GITHUB ACTIONS :
-# AM : 09:30 → 10:30 (60 min)  → 3 scans
-# PM : 14:20 → 15:00 (40 min)  → 2 scans
-# Total : 100 min/jour → 2000 min/mois (dans le quota)
+# HORAIRES COMPLETS (REPO PUBLIC) :
+# AM : 09:25 → 11:30 (125 min) → 3 scans (09:30, 10:30, 11:30)
+# PM : 13:00 → 15:30 (150 min) → 3 scans (13:00, 14:00, 15:00)
+# Intervalle entre les scans : 60 minutes
 #
 # SYNTHETIC L2 : utilisé UNIQUEMENT pour le Priority Rank et la conviction.
 # Aucun affichage dans le message Telegram.
@@ -51,7 +51,7 @@ CONFIG = {
     "price_min_stocks": 2.00,
     "price_max_stocks": 300.00,
     "price_max_etfs": 300.00,
-    "scan_interval_minutes": 30,
+    "scan_interval_minutes": 60,  # ← 60 minutes entre les scans
 
     # SYNTHETIC L2 – interne, pas affiché
     "synthetic_l2": {
@@ -1220,23 +1220,35 @@ def main():
         print(f"⚠️ Fermeture anticipée – Marché ferme à {early_hour}:00 ET.")
 
     # =========================================================
-    # HORAIRES OPTIMISÉS POUR GITHUB ACTIONS
-    # AM : 09:30 → 10:30 (60 min)  → 3 scans
-    # PM : 14:30 → 15:00 (30 min)  → 2 scans
-    # Total : 90 min/jour → 1800 min/mois (sous le quota)
+    # HORAIRES COMPLETS (REPO PUBLIC)
+    # AM : 09:25 → 11:30 (125 min) → 3 scans (09:30, 10:30, 11:30)
+    # PM : 13:00 → 15:30 (150 min) → 3 scans (13:00, 14:00, 15:00)
+    # Intervalle entre les scans : 60 minutes
     # =========================================================
-    if 9 <= heure <= 10 and (heure < 10 or minute <= 30):
+    if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
         session = "morning"
-        start_hour, start_min = 9, 30
-        end_hour, end_min = 10, 30
-        print("☀️ Session MATIN (09:30-10:30) détectée.")
-    elif 14 <= heure <= 15 and (heure == 14 and minute >= 30 or heure == 15 and minute == 0):
+        start_hour, start_min = 9, 25
+        end_hour, end_min = 11, 30
+        # Définition des heures de scan pour la session AM
+        scan_hours = [9, 10, 11]
+        scan_minutes = [30, 30, 30]  # 09:30, 10:30, 11:30
+        print("☀️ Session MATIN (09:25-11:30) détectée – Scans à 09:30, 10:30, 11:30.")
+    elif 13 <= heure <= 15 and (heure < 15 or minute <= 30):
         session = "afternoon"
-        start_hour, start_min = 14, 30
-        end_hour, end_min = 15, 0
-        print("🌙 Session APRÈS-MIDI (14:30-15:00) détectée.")
+        start_hour, start_min = 13, 0
+        if early_close and early_hour is not None:
+            end_hour = early_hour
+            end_min = 0
+            scan_hours = [13, 14]
+            scan_minutes = [0, 0]  # 13:00, 14:00
+            print(f"🌙 Session APRÈS-MIDI (13:00-{early_hour:02d}:00) détectée (EARLY CLOSE) – Scans à 13:00, 14:00.")
+        else:
+            end_hour, end_min = 15, 30
+            scan_hours = [13, 14, 15]
+            scan_minutes = [0, 0, 0]  # 13:00, 14:00, 15:00
+            print("🌙 Session APRÈS-MIDI (13:00-15:30) détectée – Scans à 13:00, 14:00, 15:00.")
     else:
-        print("⏰ Hors des plages horaires (AM: 09:30-10:30, PM: 14:30-15:00) – Arrêt.")
+        print("⏰ Hors des plages horaires (AM: 09:25-11:30, PM: 13:00-15:30) – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
                 "🤖 <b>NorthSentinel CA Only</b>™\n"
@@ -1265,7 +1277,14 @@ def main():
 
         current_hour, current_min = now.hour, now.minute
 
-        if current_min % SCAN_INTERVAL == 0:
+        # Vérifier si l'heure actuelle correspond à un scan programmé
+        is_scan_time = False
+        for idx, h in enumerate(scan_hours):
+            if current_hour == h and current_min == scan_minutes[idx]:
+                is_scan_time = True
+                break
+
+        if is_scan_time:
             print(f"\n📊 Scan à {now.strftime('%H:%M')} (session {session})")
 
             # Stocks
@@ -1375,20 +1394,31 @@ def main():
             msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
             send_telegram(msg)
 
-        # Prochaine cible
-        next_min = ((current_min // SCAN_INTERVAL) + 1) * SCAN_INTERVAL
-        next_hour = current_hour
-        if next_min >= 60:
-            next_min = 0
-            next_hour += 1
+        # Prochaine cible : on avance d'un pas de 60 minutes
+        # On trouve le prochain scan programmé
+        next_scan_time = None
+        for idx, h in enumerate(scan_hours):
+            # On cherche le prochain scan dont l'heure est >= current_hour (ou > si minute déjà passée)
+            if h > current_hour or (h == current_hour and scan_minutes[idx] > current_min):
+                next_scan_time = (h, scan_minutes[idx])
+                break
+        if next_scan_time is None:
+            # Aucun scan restant aujourd'hui, on attend la fin de session
+            # (sera géré par la condition de fin de session)
+            print("⏳ Plus aucun scan programmé dans cette session.")
+            # On attend 60 secondes puis on revérifie (permet de détecter la fin de session)
+            time.sleep(60)
+            continue
 
-        # Arrêt immédiat si la prochaine cible est après la fin
-        if next_hour > end_hour or (next_hour == end_hour and next_min > end_min):
+        target_hour, target_min = next_scan_time
+
+        # Si le prochain scan est après la fin de session, on s'arrête immédiatement
+        if target_hour > end_hour or (target_hour == end_hour and target_min > end_min):
             print("⏹️ Prochaine cible après la fin de session – Arrêt.")
             send_session_end_message(now, session)
             break
 
-        wait_until_target(next_hour, next_min)
+        wait_until_target(target_hour, target_min)
 
 if __name__ == "__main__":
     main()
