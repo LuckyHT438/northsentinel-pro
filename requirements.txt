@@ -2,4 +2,4 @@ requests>=2.31.0
 yfinance>=0.2.36
 beautifulsoup4>=4.12.3
 pytz>=2024.1
-urllib3>=2.2.1
+urllib3>=2.7.0
