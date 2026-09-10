@@ -1,7 +1,18 @@
+# .github/dependabot.yml
 version: 2
 updates:
-  # Configuration pour les dépendances Python (pip)
-  - package-ecosystem: "pip"  # L'écosystème de votre projet (pip, npm, bundler, etc.)[reference:14]
-    directory: "/"  # Le chemin où se trouve votre fichier de dépendances (requirements.txt, pyproject.toml, etc.)[reference:15]
+  # Mises à jour pour les dépendances Python (pip)
+  - package-ecosystem: "pip"        # Gestionnaire de paquets (pip pour Python)
+    directory: "/"                  # Chemin où se trouve le fichier de dépendances (racine du repo)
     schedule:
-      interval: "weekly"  # Fréquence des vérifications (daily, weekly, monthly)
+      interval: "weekly"            # Fréquence des vérifications : "daily", "weekly", "monthly"
+      day: "monday"                 # (Optionnel) Jour de la semaine pour les mises à jour hebdomadaires
+      time: "09:00"                 # (Optionnel) Heure de la vérification (UTC)
+    open-pull-requests-limit: 10    # Nombre maximal de PRs ouvertes simultanément
+    labels:                         # (Optionnel) Labels à ajouter aux PRs
+      - "dependencies"
+      - "security"
+    assignees:                      # (Optionnel) Personnes à assigner aux PRs
+      - "votre-nom-utilisateur"
+    commit-message:                 # (Optionnel) Préfixe des messages de commit
+      prefix: "chore(deps): "
