@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # Configuration pour les dépendances Python (pip)
+  - package-ecosystem: "pip"  # L'écosystème de votre projet (pip, npm, bundler, etc.)[reference:14]
+    directory: "/"  # Le chemin où se trouve votre fichier de dépendances (requirements.txt, pyproject.toml, etc.)[reference:15]
+    schedule:
+      interval: "weekly"  # Fréquence des vérifications (daily, weekly, monthly)
