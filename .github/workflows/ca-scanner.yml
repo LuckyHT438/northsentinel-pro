@@ -1,7 +1,11 @@
 name: 🍁 NorthSentinel CA Only
 
 on:
-  workflow_dispatch:  # Déclenché par les crons externes ou manuellement
+  workflow_dispatch:
+
+concurrency:
+  group: northsentinel-scan
+  cancel-in-progress: false
 
 jobs:
   scan-ca:
