@@ -5,7 +5,7 @@
 #
 # HORAIRES COMPLETS (REPO PUBLIC) :
 # AM : 09:25 → 11:30 (125 min) → 3 scans (09:30, 10:30, 11:30)
-# PM : 13:00 → 15:30 (150 min) → 3 scans (13:00, 14:00, 15:00)
+# PM : 14:00 → 15:00 (60 min)  → 2 scans (14:00, 15:00)
 # Intervalle entre les scans : 60 minutes
 #
 # SYNTHETIC L2 : utilisé UNIQUEMENT pour le Priority Rank et la conviction.
@@ -51,9 +51,8 @@ CONFIG = {
     "price_min_stocks": 2.00,
     "price_max_stocks": 300.00,
     "price_max_etfs": 300.00,
-    "scan_interval_minutes": 60,  # ← 60 minutes entre les scans
+    "scan_interval_minutes": 60,
 
-    # SYNTHETIC L2 – interne, pas affiché
     "synthetic_l2": {
         "enabled": True,
         "interval": "1m",
@@ -396,7 +395,7 @@ def get_vwap_poc(ticker):
     return vwap, poc
 
 # ============================================================
-# SYNTHETIC L2 ENGINE (interne, pas affiché)
+# SYNTHETIC L2 ENGINE
 # ============================================================
 
 def clamp(value, minimum, maximum):
@@ -413,17 +412,11 @@ def calculate_candle_flow(df):
 
 def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=None, poc=None, verbose=False):
     neutral_result = {
-        "score": 50.0,
-        "label": "Neutral",
-        "flow": 0.0,
-        "volume_acceleration": 1.0,
-        "momentum_pct": 0.0,
-        "persistence": 0.5,
-        "vwap_alignment": 0.0,
-        "poc_alignment": 0.0,
-        "spread_quality": 0.5,
-        "breakout_pressure": 0.0,
-        "bars": 0
+        "score": 50.0, "label": "Neutral", "flow": 0.0,
+        "volume_acceleration": 1.0, "momentum_pct": 0.0,
+        "persistence": 0.5, "vwap_alignment": 0.0,
+        "poc_alignment": 0.0, "spread_quality": 0.5,
+        "breakout_pressure": 0.0, "bars": 0
     }
     if not SYNTHETIC_L2_CONFIG["enabled"]:
         return neutral_result
@@ -440,8 +433,7 @@ def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=No
             hist = hist.between_time("09:30", "15:30")
         except:
             pass
-        lookback = SYNTHETIC_L2_CONFIG["lookback_bars"]
-        hist = hist.tail(lookback)
+        hist = hist.tail(SYNTHETIC_L2_CONFIG["lookback_bars"])
         if len(hist) < SYNTHETIC_L2_CONFIG["min_bars"]:
             return neutral_result
         close = hist["Close"].astype(float)
@@ -525,8 +517,7 @@ def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=No
         score = clamp(score, 0, 100)
         label = "Strong" if score >= 75 else "Supportive" if score >= 60 else "Neutral" if score >= 40 else "Weak"
         return {
-            "score": round(score, 1),
-            "label": label,
+            "score": round(score, 1), "label": label,
             "flow": round(flow, 3),
             "volume_acceleration": round(volume_acceleration, 2),
             "momentum_pct": round(momentum_pct, 2),
@@ -590,7 +581,7 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     return score, details
 
 # ============================================================
-# CONVICTION (utilise le L2 en interne)
+# CONVICTION
 # ============================================================
 
 def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_interest, market_bias, poc=None, synthetic_l2_score=50):
@@ -613,7 +604,7 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
             return "Moderate", "🔵"
         else:
             return "Low", "🟡"
-    else:  # SHORT
+    else:
         if gap <= -3.0 and vol_ratio >= 1.5:
             green_count += 1
         if vwap is not None and entry_price < vwap * 0.998:
@@ -632,7 +623,7 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
             return "Low", "🟡"
 
 # ============================================================
-# PRIORITY RANK (intègre le L2 en bonus/pénalité non linéaire)
+# PRIORITY RANK
 # ============================================================
 
 def get_verdict(confidence):
@@ -644,17 +635,16 @@ def get_verdict(confidence):
         return "Mixed", "🟡"
 
 def l2_confirmation_bonus(l2_score):
-    """Bonus/Pénalité non linéaire basé sur le score L2."""
     if l2_score >= SYNTHETIC_L2_CONFIG["strong_threshold"]:
-        return SYNTHETIC_L2_CONFIG["bonus_strong"]          # ex: +3.0
+        return SYNTHETIC_L2_CONFIG["bonus_strong"]
     elif l2_score >= SYNTHETIC_L2_CONFIG["supportive_threshold"]:
-        return SYNTHETIC_L2_CONFIG["bonus_supportive"]      # ex: +1.5
+        return SYNTHETIC_L2_CONFIG["bonus_supportive"]
     elif l2_score >= SYNTHETIC_L2_CONFIG["neutral_threshold"]:
-        return 0.0                                           # neutre
+        return 0.0
     elif l2_score >= SYNTHETIC_L2_CONFIG["weak_threshold"]:
-        return SYNTHETIC_L2_CONFIG["penalty_weak"]          # ex: -2.0
+        return SYNTHETIC_L2_CONFIG["penalty_weak"]
     else:
-        return SYNTHETIC_L2_CONFIG["penalty_bad"]           # ex: -4.0
+        return SYNTHETIC_L2_CONFIG["penalty_bad"]
 
 def calculate_priority_score(data, market_bias, is_etf=False):
     verdict_text = get_verdict(data["confidence"])[0]
@@ -694,7 +684,7 @@ def calculate_priority_score(data, market_bias, is_etf=False):
     return round(total, 2)
 
 # ============================================================
-# FONCTIONS D'ANALYSE (L1)
+# FONCTIONS D'ANALYSE
 # ============================================================
 
 def get_market_cap_category(ticker):
@@ -790,7 +780,7 @@ def compute_coherent_trailing(base_trail, trail_adj, sl_final):
     return round(trail, 2)
 
 # ============================================================
-# ANALYSE STOCK (avec placeholder L2)
+# ANALYSE STOCK
 # ============================================================
 
 def analyze_stock(ticker, verbose=True):
@@ -908,27 +898,14 @@ def analyze_stock(ticker, verbose=True):
         trail = compute_coherent_trailing(trail_base, trail_adj, sl_final)
 
         return {
-            "ticker": ticker,
-            "exchange": exchange,
-            "price": price,
-            "gap": gap,
-            "score": score,
-            "vol_ratio": vol_ratio,
-            "cap_category": cap_category,
-            "confidence": confidence,
-            "spread_pct": spread_pct,
-            "direction": direction,
-            "tp_mult": round(tp_mult, 3),
-            "sl_mult": round(sl_mult, 3),
-            "trail_pct": round(trail, 2),
-            "tp_pct": round(tp_final, 2),
-            "sl_pct": round(sl_final, 2),
-            "inst_interest": inst_score,
-            "short_ratio": short_ratio,
-            "vwap": vwap,
-            "poc": poc,
-            "synthetic_l2_score": 50.0,
-            "synthetic_l2_label": "Not evaluated"
+            "ticker": ticker, "exchange": exchange, "price": price, "gap": gap,
+            "score": score, "vol_ratio": vol_ratio, "cap_category": cap_category,
+            "confidence": confidence, "spread_pct": spread_pct, "direction": direction,
+            "tp_mult": round(tp_mult, 3), "sl_mult": round(sl_mult, 3),
+            "trail_pct": round(trail, 2), "tp_pct": round(tp_final, 2),
+            "sl_pct": round(sl_final, 2), "inst_interest": inst_score,
+            "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
+            "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated"
         }
     except Exception as e:
         if verbose:
@@ -936,7 +913,7 @@ def analyze_stock(ticker, verbose=True):
         return None
 
 # ============================================================
-# ANALYSE ETF (avec placeholder L2)
+# ANALYSE ETF
 # ============================================================
 
 def analyze_etf(ticker):
@@ -1030,33 +1007,21 @@ def analyze_etf(ticker):
         trail = compute_coherent_trailing(3.0, trail_adj, sl_final)
 
         return {
-            "ticker": ticker,
-            "exchange": exchange,
-            "price": price,
-            "gap": gap,
-            "score": score,
-            "vol_ratio": vol_ratio,
+            "ticker": ticker, "exchange": exchange, "price": price, "gap": gap,
+            "score": score, "vol_ratio": vol_ratio,
             "aum_m": round(aum / 1_000_000, 1) if aum else 0,
-            "confidence": confidence,
-            "spread_pct": spread_pct,
-            "direction": direction,
-            "tp_mult": round(tp_mult, 3),
-            "sl_mult": round(sl_mult, 3),
-            "trail_pct": round(trail, 2),
-            "tp_pct": round(tp_final, 2),
-            "sl_pct": round(sl_final, 2),
-            "inst_interest": inst_score,
-            "short_ratio": short_ratio,
-            "vwap": vwap,
-            "poc": poc,
-            "synthetic_l2_score": 50.0,
-            "synthetic_l2_label": "Not evaluated"
+            "confidence": confidence, "spread_pct": spread_pct, "direction": direction,
+            "tp_mult": round(tp_mult, 3), "sl_mult": round(sl_mult, 3),
+            "trail_pct": round(trail, 2), "tp_pct": round(tp_final, 2),
+            "sl_pct": round(sl_final, 2), "inst_interest": inst_score,
+            "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
+            "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated"
         }
     except Exception:
         return None
 
 # ============================================================
-# ENRICHISSEMENT SYNTHETIC L2 (calculé uniquement sur les meilleurs)
+# ENRICHISSEMENT SYNTHETIC L2
 # ============================================================
 
 def enrich_with_synthetic_l2(results, is_etf=False):
@@ -1075,13 +1040,9 @@ def enrich_with_synthetic_l2(results, is_etf=False):
             data["synthetic_l2_label"] = "Not evaluated"
             continue
         l2 = calculate_synthetic_l2(
-            ticker=data["ticker"],
-            direction=data["direction"],
-            current_price=data["price"],
-            spread_pct=data["spread_pct"],
-            vwap=data.get("vwap"),
-            poc=data.get("poc"),
-            verbose=True
+            ticker=data["ticker"], direction=data["direction"],
+            current_price=data["price"], spread_pct=data["spread_pct"],
+            vwap=data.get("vwap"), poc=data.get("poc"), verbose=True
         )
         data["synthetic_l2_score"] = l2["score"]
         data["synthetic_l2_label"] = l2["label"]
@@ -1222,33 +1183,35 @@ def main():
     # =========================================================
     # HORAIRES COMPLETS (REPO PUBLIC)
     # AM : 09:25 → 11:30 (125 min) → 3 scans (09:30, 10:30, 11:30)
-    # PM : 13:00 → 15:30 (150 min) → 3 scans (13:00, 14:00, 15:00)
-    # Intervalle entre les scans : 60 minutes
+    # PM : 14:00 → 15:00 (60 min)  → 2 scans (14:00, 15:00)
     # =========================================================
     if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
         session = "morning"
         start_hour, start_min = 9, 25
         end_hour, end_min = 11, 30
-        # Définition des heures de scan pour la session AM
         scan_hours = [9, 10, 11]
         scan_minutes = [30, 30, 30]  # 09:30, 10:30, 11:30
         print("☀️ Session MATIN (09:25-11:30) détectée – Scans à 09:30, 10:30, 11:30.")
-    elif 13 <= heure <= 15 and (heure < 15 or minute <= 30):
+    elif 14 <= heure <= 15 and (heure < 15 or minute <= 0):
         session = "afternoon"
-        start_hour, start_min = 13, 0
-        if early_close and early_hour is not None:
-            end_hour = early_hour
-            end_min = 0
-            scan_hours = [13, 14]
-            scan_minutes = [0, 0]  # 13:00, 14:00
-            print(f"🌙 Session APRÈS-MIDI (13:00-{early_hour:02d}:00) détectée (EARLY CLOSE) – Scans à 13:00, 14:00.")
-        else:
-            end_hour, end_min = 15, 30
-            scan_hours = [13, 14, 15]
-            scan_minutes = [0, 0, 0]  # 13:00, 14:00, 15:00
-            print("🌙 Session APRÈS-MIDI (13:00-15:30) détectée – Scans à 13:00, 14:00, 15:00.")
+        start_hour, start_min = 14, 0
+        end_hour, end_min = 15, 0
+        if early_close and early_hour is not None and early_hour <= 14:
+            print(f"🌙 Session APRÈS-MIDI annulée – early close à {early_hour}:00 ET (avant 14:00).")
+            if IS_MANUAL_RUN:
+                msg = (
+                    "🤖 <b>NorthSentinel CA Only</b>™\n"
+                    "<i>Early close at " + str(early_hour) + ":00 ET – No PM session today.</i>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "<i>Informational automated signal. Not financial or trading advice.</i>"
+                )
+                send_telegram(msg)
+            return
+        scan_hours = [14, 15]
+        scan_minutes = [0, 0]  # 14:00, 15:00
+        print("🌙 Session APRÈS-MIDI (14:00-15:00) détectée – Scans à 14:00, 15:00.")
     else:
-        print("⏰ Hors des plages horaires (AM: 09:25-11:30, PM: 13:00-15:30) – Arrêt.")
+        print("⏰ Hors des plages horaires (AM: 09:25-11:30, PM: 14:00-15:00) – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
                 "🤖 <b>NorthSentinel CA Only</b>™\n"
@@ -1269,7 +1232,6 @@ def main():
     while True:
         now = datetime.now(MONTREAL_TZ)
 
-        # Fin de session
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session ({end_hour:02d}:{end_min:02d}) – Arrêt.")
             send_session_end_message(now, session)
@@ -1277,7 +1239,6 @@ def main():
 
         current_hour, current_min = now.hour, now.minute
 
-        # Vérifier si l'heure actuelle correspond à un scan programmé
         is_scan_time = False
         for idx, h in enumerate(scan_hours):
             if current_hour == h and current_min == scan_minutes[idx]:
@@ -1287,7 +1248,6 @@ def main():
         if is_scan_time:
             print(f"\n📊 Scan à {now.strftime('%H:%M')} (session {session})")
 
-            # Stocks
             stocks_results = []
             for ticker in STOCK_TICKERS:
                 print(f"  - {ticker}:")
@@ -1298,7 +1258,6 @@ def main():
                 else:
                     print("    ❌")
 
-            # ETFs
             etfs_results = []
             for ticker in ETF_TICKERS:
                 print(f"  - {ticker}...", end=" ")
@@ -1309,7 +1268,6 @@ def main():
                 else:
                     print("❌")
 
-            # SYNTHETIC L2 – calcul sur les meilleurs candidats seulement
             print("\n🧠 ================================")
             print("🧠 SYNTHETIC L2 — STOCKS")
             print("🧠 ================================")
@@ -1319,7 +1277,6 @@ def main():
             print("🧠 ================================")
             etfs_results = enrich_with_synthetic_l2(etfs_results, is_etf=True)
 
-            # ---- SÉLECTION AVEC PAIRES OPPOSÉES CONDITIONNELLES ----
             stock_long = [s for s in stocks_results if s["direction"] == "LONG"]
             stock_short = [s for s in stocks_results if s["direction"] == "SHORT"]
             etf_long = [e for e in etfs_results if e["direction"] == "LONG"]
@@ -1343,14 +1300,12 @@ def main():
             possible_pairs = []
             threshold = SYNTHETIC_L2_CONFIG["priority_threshold_for_pair"]
 
-            # Paire 1 : stock LONG + ETF SHORT
             if best_stock_long and best_etf_short:
                 score_stock = calculate_priority_score(best_stock_long, "⚪ Neutral", False)
                 score_etf = calculate_priority_score(best_etf_short, "⚪ Neutral", True)
                 if score_stock >= threshold and score_etf >= threshold:
                     possible_pairs.append((best_stock_long, best_etf_short, score_stock + score_etf))
 
-            # Paire 2 : stock SHORT + ETF LONG
             if best_stock_short and best_etf_long:
                 score_stock = calculate_priority_score(best_stock_short, "⚪ Neutral", False)
                 score_etf = calculate_priority_score(best_etf_long, "⚪ Neutral", True)
@@ -1369,7 +1324,6 @@ def main():
                 selected_stock = get_best(all_stocks, False)
                 selected_etf = get_best(all_etfs, True)
 
-            # Construction du message (structure inchangée)
             msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
             msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
             msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
@@ -1394,25 +1348,18 @@ def main():
             msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
             send_telegram(msg)
 
-        # Prochaine cible : on avance d'un pas de 60 minutes
-        # On trouve le prochain scan programmé
         next_scan_time = None
         for idx, h in enumerate(scan_hours):
-            # On cherche le prochain scan dont l'heure est >= current_hour (ou > si minute déjà passée)
             if h > current_hour or (h == current_hour and scan_minutes[idx] > current_min):
                 next_scan_time = (h, scan_minutes[idx])
                 break
         if next_scan_time is None:
-            # Aucun scan restant aujourd'hui, on attend la fin de session
-            # (sera géré par la condition de fin de session)
             print("⏳ Plus aucun scan programmé dans cette session.")
-            # On attend 60 secondes puis on revérifie (permet de détecter la fin de session)
             time.sleep(60)
             continue
 
         target_hour, target_min = next_scan_time
 
-        # Si le prochain scan est après la fin de session, on s'arrête immédiatement
         if target_hour > end_hour or (target_hour == end_hour and target_min > end_min):
             print("⏹️ Prochaine cible après la fin de session – Arrêt.")
             send_session_end_message(now, session)
