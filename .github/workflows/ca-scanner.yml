@@ -1,11 +1,13 @@
 name: 🍁 NorthSentinel CA Only
 
 on:
-  workflow_dispatch:  # Déclenchement manuel pour tests uniquement
+  workflow_dispatch:  # Déclenché par les crons externes ou manuellement
 
 jobs:
   scan-ca:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -17,7 +19,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests yfinance beautifulsoup4 pytz urllib3
+          pip install --upgrade pip
+          pip install requests yfinance beautifulsoup4 pytz urllib3 pandas
 
       - name: Run CA Scanner
         env:
