@@ -1,20 +1,25 @@
 # ============================================================
-# NORTHSENTINEL CA ONLY — SCANNER INTRADAY (SCAN UNIQUE PAR RUN)
+# NORTHSENTINEL CA ONLY — SCANNER INTRADAY CONTINU (BOUCLE)
 # SHORTS + LONGS — 3 SOURCES DE NEWS
 # VERSION FINALE AVEC SYNTHETIC L2 (INTERNE) + PAIRES OPPOSÉES CONDITIONNELLES
 #
-# CHAQUE INVOCATION FAIT UN SEUL SCAN PUIS SE TERMINE.
-# Les crons externes doivent déclencher le workflow à :
-#   AM : 09:30, 10:30, 11:30 (ET)
-#   PM : 14:00, 15:00 (ET)
+# HORAIRES COMPLETS (REPO PUBLIC) :
+# AM : 09:25 → 11:30 (125 min) → 3 scans (09:30, 10:30, 11:30)
+# PM : 14:00 → 15:00 (60 min)  → 2 scans (14:00, 15:00)
+# Intervalle entre les scans : 60 minutes
 #
 # SYNTHETIC L2 : utilisé UNIQUEMENT pour le Priority Rank et la conviction.
 # Aucun affichage dans le message Telegram.
 #
 # PRIORITY RANK intègre un bonus/pénalité non linéaire basé sur le score L2.
+# Seuils configurables via CONFIG.
 #
-# SÉLECTION : paire stock/ETF de directions opposées si les deux setups ont
-# un Priority Score ≥ SEUIL_PRIORITY. Sinon, meilleur setup global.
+# SÉLECTION : on cherche une paire stock/ETF de directions opposées si
+# les deux setups ont un Priority Score ≥ SEUIL_PRIORITY.
+# Sinon, on envoie le meilleur setup global (stock ou ETF).
+#
+# GESTION COMPLÈTE DES SESSIONS, FERMETURES ANTICIPÉES,
+# TRAILING STOP COHÉRENT, MESSAGE DE FIN DE SESSION.
 # ============================================================
 
 import requests
@@ -174,20 +179,20 @@ HTTP_SESSION = create_session()
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN:
-        print("⚠️ Token Telegram manquant", flush=True)
+        print("⚠️ Token Telegram manquant")
         return False
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
-            print("✅ Telegram envoyé", flush=True)
+            print("✅ Telegram envoyé")
             return True
         else:
-            print(f"❌ Erreur Telegram {r.status_code}: {r.text}", flush=True)
+            print(f"❌ Erreur Telegram {r.status_code}: {r.text}")
             return False
     except Exception as e:
-        print(f"❌ Exception Telegram: {e}", flush=True)
+        print(f"❌ Exception Telegram: {e}")
         return False
 
 def send_session_end_message(now, session):
@@ -535,7 +540,7 @@ def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=No
         }
     except Exception as e:
         if verbose:
-            print(f"     ⚠️ Synthetic L2 indisponible: {e}", flush=True)
+            print(f"     ⚠️ Synthetic L2 indisponible: {e}")
         return neutral_result
 
 # ============================================================
@@ -796,7 +801,7 @@ def analyze_stock(ticker, verbose=True):
         price = info.get("regularMarketPrice") or info.get("currentPrice")
         if not price or price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             if verbose:
-                print(f"  ❌ Prix hors limites ({price})", flush=True)
+                print(f"  ❌ Prix hors limites ({price})")
             return None
         bid = info.get("bid")
         ask = info.get("ask")
@@ -806,7 +811,7 @@ def analyze_stock(ticker, verbose=True):
             spread_pct = ((ask - bid) / mid) * 100
             if spread_pct > MAX_SPREAD_PCT:
                 if verbose:
-                    print(f"  ❌ Spread {spread_pct:.2f}% > {MAX_SPREAD_PCT}%", flush=True)
+                    print(f"  ❌ Spread {spread_pct:.2f}% > {MAX_SPREAD_PCT}%")
                 return None
         prev_close = info.get("previousClose")
         if not prev_close or prev_close == 0:
@@ -822,7 +827,7 @@ def analyze_stock(ticker, verbose=True):
             score += 1
         else:
             if verbose:
-                print(f"  ❌ Gap {gap:.2f}% hors plage", flush=True)
+                print(f"  ❌ Gap {gap:.2f}% hors plage")
             return None
         volume = info.get("volume", 0)
         avg_vol = info.get("averageVolume", volume)
@@ -865,13 +870,13 @@ def analyze_stock(ticker, verbose=True):
                     score -= 1
                     break
         if verbose:
-            print(f"  📊 Score: {score}/7 | Gap: {gap:.2f}% | Vol: x{vol_ratio:.2f} | Direction: {direction}", flush=True)
+            print(f"  📊 Score: {score}/7 | Gap: {gap:.2f}% | Vol: x{vol_ratio:.2f} | Direction: {direction}")
         if score < SCORE_MIN_STOCKS:
             return None
 
         inst_score, _ = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
         if verbose:
-            print(f"     🏛️ Inst. Interest: {inst_score}/10", flush=True)
+            print(f"     🏛️ Inst. Interest: {inst_score}/10")
 
         vwap, poc = get_vwap_poc(ticker)
         if vwap is not None:
@@ -914,7 +919,7 @@ def analyze_stock(ticker, verbose=True):
         }
     except Exception as e:
         if verbose:
-            print(f"  ⚠️ Ticker indisponible: {e}", flush=True)
+            print(f"  ⚠️ Ticker indisponible: {e}")
         return None
 
 # ============================================================
@@ -1023,7 +1028,7 @@ def analyze_etf(ticker):
             "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated"
         }
     except Exception as e:
-        print(f"  ⚠️ ETF indisponible ({ticker}): {e}", flush=True)
+        print(f"  ⚠️ ETF indisponible ({ticker}): {e}")
         return None
 
 # ============================================================
@@ -1144,7 +1149,21 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     return msg
 
 # ============================================================
-# MAIN — UN SEUL SCAN PAR INVOCATION
+# ATTENTE
+# ============================================================
+
+def wait_until_target(target_hour, target_minute):
+    now = datetime.now(MONTREAL_TZ)
+    target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(minutes=SCAN_INTERVAL)
+    diff = (target - now).total_seconds()
+    if diff > 0:
+        print(f"⏳ Attente jusqu'à {target.strftime('%H:%M')}... ({diff/60:.1f} min)")
+        time.sleep(diff)
+
+# ============================================================
+# MAIN
 # ============================================================
 
 def main():
@@ -1153,7 +1172,7 @@ def main():
     minute = now.minute
 
     if is_ca_market_closed(now):
-        print("🏖️ Marché CA fermé – Arrêt.", flush=True)
+        print("🏖️ Marché CA fermé – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
                 "🤖 <b>NorthSentinel CA Only</b>™\n"
@@ -1170,26 +1189,40 @@ def main():
     early_close = is_early_close(now)
     early_hour = get_early_close_hour(now) if early_close else None
     if early_close:
-        print(f"⚠️ Fermeture anticipée – Marché ferme à {early_hour}:00 ET.", flush=True)
+        print(f"⚠️ Fermeture anticipée – Marché ferme à {early_hour}:00 ET.")
 
     # =========================================================
-    # DÉTERMINATION DE LA SESSION
+    # HORAIRES COMPLETS (REPO PUBLIC)
+    # AM : 09:25 → 11:30 (125 min) → 3 scans (09:30, 10:30, 11:30)
+    # PM : 14:00 → 15:00 (60 min)  → 2 scans (14:00, 15:00)
     # =========================================================
-    if 9 <= heure <= 11 and (heure < 11 or minute <= 35):
+    if 9 <= heure <= 11 and (heure < 11 or minute <= 30):
         session = "morning"
+        start_hour, start_min = 9, 25
+        end_hour, end_min = 11, 30
         scan_hours = [9, 10, 11]
         scan_minutes = [30, 30, 30]
-        print("☀️ Session MATIN détectée.", flush=True)
-    elif 14 <= heure <= 15 and (heure < 15 or minute <= 5):
+        print("☀️ Session MATIN (09:25-11:30) détectée – Scans à 09:30, 10:30, 11:30.")
+    elif 14 <= heure <= 15 and (heure < 15 or minute <= 0):
         session = "afternoon"
+        start_hour, start_min = 14, 0
+        end_hour, end_min = 15, 0
         if early_close and early_hour is not None and early_hour <= 14:
-            print(f"🌙 Session PM annulée – early close à {early_hour}:00 ET.", flush=True)
+            print(f"🌙 Session APRÈS-MIDI annulée – early close à {early_hour}:00 ET (avant 14:00).")
+            if IS_MANUAL_RUN:
+                msg = (
+                    "🤖 <b>NorthSentinel CA Only</b>™\n"
+                    "<i>Early close at " + str(early_hour) + ":00 ET – No PM session today.</i>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "<i>Informational automated signal. Not financial or trading advice.</i>"
+                )
+                send_telegram(msg)
             return
         scan_hours = [14, 15]
         scan_minutes = [0, 0]
-        print("🌙 Session APRÈS-MIDI détectée.", flush=True)
+        print("🌙 Session APRÈS-MIDI (14:00-15:00) détectée – Scans à 14:00, 15:00.")
     else:
-        print(f"⏰ Hors plage horaire ({now.strftime('%H:%M')}) – Arrêt.", flush=True)
+        print("⏰ Hors des plages horaires (AM: 09:25-11:30, PM: 14:00-15:00) – Arrêt.")
         if IS_MANUAL_RUN:
             msg = (
                 "🤖 <b>NorthSentinel CA Only</b>™\n"
@@ -1203,129 +1236,147 @@ def main():
             send_telegram(msg)
         return
 
-    # =========================================================
-    # VÉRIFIER SI ON EST DANS UN CRÉNEAU DE SCAN (tolérance 5 min)
-    # =========================================================
-    is_scan_time = False
-    matched_slot = None
-    current_total = heure * 60 + minute
-    for h, m in zip(scan_hours, scan_minutes):
-        slot_total = h * 60 + m
-        if 0 <= current_total - slot_total <= 5:
-            is_scan_time = True
-            matched_slot = f"{h:02d}:{m:02d}"
+    now = datetime.now(MONTREAL_TZ)
+    if now.hour < start_hour or (now.hour == start_hour and now.minute < start_min):
+        wait_until_target(start_hour, start_min)
+
+    while True:
+        now = datetime.now(MONTREAL_TZ)
+
+        if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
+            print(f"⏹️ Fin de session ({end_hour:02d}:{end_min:02d}) – Arrêt.")
+            send_session_end_message(now, session)
             break
 
-    if not is_scan_time:
-        print(f"⏰ Pas un créneau de scan à {now.strftime('%H:%M')} – Arrêt.", flush=True)
-        return
+        current_hour, current_min = now.hour, now.minute
 
-    print(f"\n📊 Scan à {now.strftime('%H:%M')} (créneau {matched_slot}, session {session})", flush=True)
+        is_scan_time = False
+        for idx, h in enumerate(scan_hours):
+            if current_hour == h and current_min == scan_minutes[idx]:
+                is_scan_time = True
+                break
 
-    # =========================================================
-    # SCAN UNIQUE
-    # =========================================================
-    stocks_results = []
-    for ticker in STOCK_TICKERS:
-        print(f"  - {ticker}:", flush=True)
-        data = analyze_stock(ticker, verbose=True)
-        if data:
-            stocks_results.append(data)
-            print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}%", flush=True)
-        else:
-            print("    ❌", flush=True)
+        if is_scan_time:
+            print(f"\n📊 Scan à {now.strftime('%H:%M')} (session {session})")
 
-    etfs_results = []
-    for ticker in ETF_TICKERS:
-        print(f"  - {ticker}...", end=" ", flush=True)
-        data = analyze_etf(ticker)
-        if data:
-            etfs_results.append(data)
-            print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}%", flush=True)
-        else:
-            print("❌", flush=True)
+            stocks_results = []
+            for ticker in STOCK_TICKERS:
+                print(f"  - {ticker}:")
+                data = analyze_stock(ticker, verbose=True)
+                if data:
+                    stocks_results.append(data)
+                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}%")
+                else:
+                    print("    ❌")
 
-    print("\n🧠 ================================", flush=True)
-    print("🧠 SYNTHETIC L2 — STOCKS", flush=True)
-    print("🧠 ================================", flush=True)
-    stocks_results = enrich_with_synthetic_l2(stocks_results, is_etf=False)
-    print("\n🧠 ================================", flush=True)
-    print("🧠 SYNTHETIC L2 — ETFs", flush=True)
-    print("🧠 ================================", flush=True)
-    etfs_results = enrich_with_synthetic_l2(etfs_results, is_etf=True)
+            etfs_results = []
+            for ticker in ETF_TICKERS:
+                print(f"  - {ticker}...", end=" ")
+                data = analyze_etf(ticker)
+                if data:
+                    etfs_results.append(data)
+                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}%")
+                else:
+                    print("❌")
 
-    stock_long = [s for s in stocks_results if s["direction"] == "LONG"]
-    stock_short = [s for s in stocks_results if s["direction"] == "SHORT"]
-    etf_long = [e for e in etfs_results if e["direction"] == "LONG"]
-    etf_short = [e for e in etfs_results if e["direction"] == "SHORT"]
+            print("\n🧠 ================================")
+            print("🧠 SYNTHETIC L2 — STOCKS")
+            print("🧠 ================================")
+            stocks_results = enrich_with_synthetic_l2(stocks_results, is_etf=False)
+            print("\n🧠 ================================")
+            print("🧠 SYNTHETIC L2 — ETFs")
+            print("🧠 ================================")
+            etfs_results = enrich_with_synthetic_l2(etfs_results, is_etf=True)
 
-    def get_best(candidates, is_etf):
-        if not candidates:
-            return None
-        scored = []
-        for cand in candidates:
-            ps = calculate_priority_score(cand, "⚪ Neutral", is_etf)
-            scored.append((ps, cand))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[0][1]
+            stock_long = [s for s in stocks_results if s["direction"] == "LONG"]
+            stock_short = [s for s in stocks_results if s["direction"] == "SHORT"]
+            etf_long = [e for e in etfs_results if e["direction"] == "LONG"]
+            etf_short = [e for e in etfs_results if e["direction"] == "SHORT"]
 
-    best_stock_long = get_best(stock_long, False)
-    best_stock_short = get_best(stock_short, False)
-    best_etf_long = get_best(etf_long, True)
-    best_etf_short = get_best(etf_short, True)
+            def get_best(candidates, is_etf):
+                if not candidates:
+                    return None
+                scored = []
+                for cand in candidates:
+                    ps = calculate_priority_score(cand, "⚪ Neutral", is_etf)
+                    scored.append((ps, cand))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                return scored[0][1]
 
-    possible_pairs = []
-    threshold = SYNTHETIC_L2_CONFIG["priority_threshold_for_pair"]
+            best_stock_long = get_best(stock_long, False)
+            best_stock_short = get_best(stock_short, False)
+            best_etf_long = get_best(etf_long, True)
+            best_etf_short = get_best(etf_short, True)
 
-    if best_stock_long and best_etf_short:
-        score_stock = calculate_priority_score(best_stock_long, "⚪ Neutral", False)
-        score_etf = calculate_priority_score(best_etf_short, "⚪ Neutral", True)
-        if score_stock >= threshold and score_etf >= threshold:
-            possible_pairs.append((best_stock_long, best_etf_short, score_stock + score_etf))
+            possible_pairs = []
+            threshold = SYNTHETIC_L2_CONFIG["priority_threshold_for_pair"]
 
-    if best_stock_short and best_etf_long:
-        score_stock = calculate_priority_score(best_stock_short, "⚪ Neutral", False)
-        score_etf = calculate_priority_score(best_etf_long, "⚪ Neutral", True)
-        if score_stock >= threshold and score_etf >= threshold:
-            possible_pairs.append((best_stock_short, best_etf_long, score_stock + score_etf))
+            if best_stock_long and best_etf_short:
+                score_stock = calculate_priority_score(best_stock_long, "⚪ Neutral", False)
+                score_etf = calculate_priority_score(best_etf_short, "⚪ Neutral", True)
+                if score_stock >= threshold and score_etf >= threshold:
+                    possible_pairs.append((best_stock_long, best_etf_short, score_stock + score_etf))
 
-    selected_stock = None
-    selected_etf = None
+            if best_stock_short and best_etf_long:
+                score_stock = calculate_priority_score(best_stock_short, "⚪ Neutral", False)
+                score_etf = calculate_priority_score(best_etf_long, "⚪ Neutral", True)
+                if score_stock >= threshold and score_etf >= threshold:
+                    possible_pairs.append((best_stock_short, best_etf_long, score_stock + score_etf))
 
-    if possible_pairs:
-        best_pair = max(possible_pairs, key=lambda x: x[2])
-        selected_stock, selected_etf = best_pair[0], best_pair[1]
-    else:
-        all_stocks = [s for s in stocks_results]
-        all_etfs = [e for e in etfs_results]
-        selected_stock = get_best(all_stocks, False)
-        selected_etf = get_best(all_etfs, True)
+            selected_stock = None
+            selected_etf = None
 
-    msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
-    msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
-    msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
-    msg += f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
-    msg += "═══════════════════════════════════\n"
+            if possible_pairs:
+                best_pair = max(possible_pairs, key=lambda x: x[2])
+                selected_stock, selected_etf = best_pair[0], best_pair[1]
+            else:
+                all_stocks = [s for s in stocks_results]
+                all_etfs = [e for e in etfs_results]
+                selected_stock = get_best(all_stocks, False)
+                selected_etf = get_best(all_etfs, True)
 
-    msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
-    if selected_stock:
-        rank = "1/2" if selected_etf else "1/1"
-        msg += build_setup_message(selected_stock, is_etf=False, bias="⚪ Neutral", rank=rank)
-    else:
-        msg += "   <i>Aucun setup STOCK valide trouvé.</i>\n"
+            msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
+            msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
+            msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
+            msg += f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
+            msg += "═══════════════════════════════════\n"
 
-    msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
-    if selected_etf:
-        rank = "2/2" if selected_stock else "1/1"
-        msg += build_setup_message(selected_etf, is_etf=True, bias="⚪ Neutral", rank=rank)
-    else:
-        msg += "   <i>Aucun setup ETF valide trouvé.</i>\n"
+            msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
+            if selected_stock:
+                rank = "1/2" if selected_etf else "1/1"
+                msg += build_setup_message(selected_stock, is_etf=False, bias="⚪ Neutral", rank=rank)
+            else:
+                msg += "   <i>Aucun setup STOCK valide trouvé.</i>\n"
 
-    msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
-    send_telegram(msg)
+            msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
+            if selected_etf:
+                rank = "2/2" if selected_stock else "1/1"
+                msg += build_setup_message(selected_etf, is_etf=True, bias="⚪ Neutral", rank=rank)
+            else:
+                msg += "   <i>Aucun setup ETF valide trouvé.</i>\n"
 
-    print(f"✅ Scan terminé – {now.strftime('%H:%M')}", flush=True)
+            msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
+            send_telegram(msg)
+
+        next_scan_time = None
+        for idx, h in enumerate(scan_hours):
+            if h > current_hour or (h == current_hour and scan_minutes[idx] > current_min):
+                next_scan_time = (h, scan_minutes[idx])
+                break
+        if next_scan_time is None:
+            print("⏳ Plus aucun scan programmé dans cette session.")
+            time.sleep(60)
+            continue
+
+        target_hour, target_min = next_scan_time
+
+        if target_hour > end_hour or (target_hour == end_hour and target_min > end_min):
+            print("⏹️ Prochaine cible après la fin de session – Arrêt.")
+            send_session_end_message(now, session)
+            break
+
+        wait_until_target(target_hour, target_min)
 
 if __name__ == "__main__":
     main()
