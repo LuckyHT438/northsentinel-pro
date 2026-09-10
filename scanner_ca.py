@@ -30,11 +30,21 @@ import random
 import os
 import sys
 import re
+import logging
+import warnings
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 import pytz
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# ============================================================
+# SILENCE DES WARNINGS YFINANCE
+# ============================================================
+
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("urllib3").setLevel(logging.CRITICAL)
+warnings.filterwarnings("ignore")
 
 # ============================================================
 # CONFIGURATION
@@ -909,7 +919,7 @@ def analyze_stock(ticker, verbose=True):
         }
     except Exception as e:
         if verbose:
-            print(f"  ❌ Exception: {e}")
+            print(f"  ⚠️ Ticker indisponible: {e}")
         return None
 
 # ============================================================
@@ -1017,7 +1027,8 @@ def analyze_etf(ticker):
             "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
             "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated"
         }
-    except Exception:
+    except Exception as e:
+        print(f"  ⚠️ ETF indisponible ({ticker}): {e}")
         return None
 
 # ============================================================
@@ -1190,7 +1201,7 @@ def main():
         start_hour, start_min = 9, 25
         end_hour, end_min = 11, 30
         scan_hours = [9, 10, 11]
-        scan_minutes = [30, 30, 30]  # 09:30, 10:30, 11:30
+        scan_minutes = [30, 30, 30]
         print("☀️ Session MATIN (09:25-11:30) détectée – Scans à 09:30, 10:30, 11:30.")
     elif 14 <= heure <= 15 and (heure < 15 or minute <= 0):
         session = "afternoon"
@@ -1208,7 +1219,7 @@ def main():
                 send_telegram(msg)
             return
         scan_hours = [14, 15]
-        scan_minutes = [0, 0]  # 14:00, 15:00
+        scan_minutes = [0, 0]
         print("🌙 Session APRÈS-MIDI (14:00-15:00) détectée – Scans à 14:00, 15:00.")
     else:
         print("⏰ Hors des plages horaires (AM: 09:25-11:30, PM: 14:00-15:00) – Arrêt.")
