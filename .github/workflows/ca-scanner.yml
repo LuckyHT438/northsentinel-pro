@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install requests yfinance beautifulsoup4 pytz urllib3 pandas
+          pip install requests yfinance beautifulsoup4 lxml pytz urllib3 pandas
 
       - name: Run CA Scanner
         env:
