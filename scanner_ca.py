@@ -3,25 +3,11 @@
 # SHORTS + LONGS — 3 SOURCES DE NEWS
 # VERSION FINALE AVEC SYNTHETIC L2 (INTERNE) + PAIRES OPPOSÉES CONDITIONNELLES
 #
-# 2 CRONS EXTERNES :
-#   - AM : déclenché à 09:30 ET → tourne jusqu'à 11:30 (scans à 09:30, 10:30, 11:30)
-#   - PM : déclenché à 14:00 ET → tourne jusqu'à 15:00 (scans à 14:00, 15:00)
-#
-# SYNTHETIC L2 : utilisé UNIQUEMENT pour le Priority Rank et la conviction.
-# Aucun affichage dans le message Telegram.
-#
-# PRIORITY RANK intègre un bonus/pénalité non linéaire basé sur le score L2.
-#
-# SÉLECTION : paire stock/ETF de directions opposées si les deux setups ont
-# un Priority Score ≥ SEUIL_PRIORITY. Sinon, UN SEUL setup (le meilleur global).
-# JAMAIS deux setups de même direction dans un message Telegram.
-#
-# >>> CORRECTIFS ASYMÉTRIQUES SHORT (Recommandations 2 et 3) <<<
-# - SL des SHORTs élargi (+0.4%) — les baisses sont plus volatiles
-# - TP ajusté pour préserver R/R ≥ 2:1
-# - Gap minimum SHORT renforcé (-2% → -2.5%)
-# - Vol_ratio minimum SHORT renforcé (0.8 → 0.9)
-# - ETFs SHORT : gap minimum renforcé (-0.5% → -0.75%)
+# >>> CORRECTIF VWAP/POC (2026-09-13) <<<
+# - VWAP/POC via module local pro_volume_profile (direction-aware)
+# - Verdict VWAP/POC adapté au sens du trade (LONG/SHORT)
+# - Conviction et Priority Rank alimentés par VWAP/POC réels
+# - Étiquettes CONVICTION et RANK en majuscules
 # ============================================================
 
 import requests
@@ -39,6 +25,9 @@ from bs4 import BeautifulSoup
 import pytz
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# >>> MODULE EXTERNE VWAP/POC (calcul local yfinance, direction-aware) <<<
+from pro_volume_profile import get_volume_profile
 
 # ============================================================
 # SILENCE DES WARNINGS YFINANCE
@@ -85,15 +74,12 @@ CONFIG = {
         "priority_threshold_for_pair": 12.0
     },
 
-    # ========================================================
-    # CORRECTIFS ASYMÉTRIQUES SHORT (Recommandations 2 et 3)
-    # ========================================================
     "short_adjustment": {
-        "sl_widening_pct": 0.4,       # +0.4% sur le SL des SHORTs (Recommandation 3)
-        "trail_widening_pct": 0.2,    # +0.2% sur le trailing des SHORTs
-        "gap_min_short": -2.5,        # Gap minimum SHORT renforcé (Recommandation 2)
-        "vol_ratio_min_short": 0.9,   # Vol_ratio minimum SHORT renforcé
-        "etf_gap_min_short": -0.75    # Gap minimum SHORT des ETFs renforcé
+        "sl_widening_pct": 0.4,
+        "trail_widening_pct": 0.2,
+        "gap_min_short": -2.5,
+        "vol_ratio_min_short": 0.9,
+        "etf_gap_min_short": -0.75
     },
 
     "tickers": {
@@ -144,6 +130,7 @@ MONTREAL_TZ = pytz.timezone("America/Toronto")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
 
+# Variables conservées (non utilisées depuis le correctif VWAP/POC)
 POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY")
 ALPHAVANTAGE_API_KEY = os.environ.get("ALPHAVANTAGE_API_KEY")
 
@@ -164,7 +151,6 @@ STOCK_TICKERS = CONFIG["tickers"]["stocks"]
 ETF_TICKERS = CONFIG["tickers"]["etfs"]
 SYNTHETIC_L2_CONFIG = CONFIG["synthetic_l2"]
 
-# --- Correctifs SHORT (Recommandations 2 et 3) ---
 SHORT_ADJ = CONFIG["short_adjustment"]
 SHORT_SL_WIDENING = SHORT_ADJ["sl_widening_pct"]
 SHORT_TRAIL_WIDENING = SHORT_ADJ["trail_widening_pct"]
@@ -376,54 +362,33 @@ def analyze_sentiment(title):
     return score
 
 # ============================================================
-# VWAP / POC
+# VWAP / POC — MODULE EXTERNE (calcul local yfinance, direction-aware)
 # ============================================================
 
-def get_vwap_polygon(ticker):
-    if not POLYGON_API_KEY:
-        return None
+def get_vwap_poc(ticker, current_price, direction="LONG"):
+    """
+    Récupère VWAP, POC et ligne verdict via le module pro_volume_profile.
+    La direction est passée au module pour adapter le verdict (LONG/SHORT).
+    Retourne (vwap, poc, verdict_line).
+    """
     try:
-        clean_ticker = ticker.replace(".TO", "").replace(".V", "")
-        url = f"https://api.polygon.io/v1/indicators/vwap/{clean_ticker}?timespan=minute&window=1&adjusted=true&apiKey={POLYGON_API_KEY}"
-        r = requests.get(url, timeout=5)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        if "results" in data and data["results"] and "values" in data["results"]:
-            return data["results"]["values"][-1]["value"]
-        return None
-    except:
-        return None
+        result = get_volume_profile(ticker, current_price, direction)
+        vwap = result.get("vwap")
+        poc = result.get("poc")
 
-def get_poc_alphavantage(ticker):
-    if not ALPHAVANTAGE_API_KEY:
-        return None
-    try:
-        clean_ticker = ticker.replace(".TO", "").replace(".V", "")
-        url = f"https://www.alphavantage.co/query?function=OHLCV&symbol={clean_ticker}&interval=1min&apikey={ALPHAVANTAGE_API_KEY}&outputsize=compact"
-        r = requests.get(url, timeout=5)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        if "Time Series (1min)" not in data:
-            return None
-        time_series = data["Time Series (1min)"]
-        volume_by_price = {}
-        for values in time_series.values():
-            price = float(values["4. close"])
-            volume = float(values["5. volume"])
-            price_rounded = round(price, 2)
-            volume_by_price[price_rounded] = volume_by_price.get(price_rounded, 0) + volume
-        if not volume_by_price:
-            return None
-        return max(volume_by_price, key=volume_by_price.get)
-    except:
-        return None
+        verdict_line = ""
+        line = result.get("line", "")
+        if line:
+            for part in line.split("\n"):
+                stripped = part.strip()
+                if stripped.startswith("📐"):
+                    verdict_line = stripped
+                    break
 
-def get_vwap_poc(ticker):
-    vwap = get_vwap_polygon(ticker)
-    poc = get_poc_alphavantage(ticker)
-    return vwap, poc
+        return vwap, poc, verdict_line
+    except Exception as e:
+        print(f"  ⚠️ VWAP/POC indisponible ({ticker}): {e}", flush=True)
+        return None, None, ""
 
 # ============================================================
 # SYNTHETIC L2 ENGINE
@@ -840,7 +805,6 @@ def analyze_stock(ticker, verbose=True):
         gap = ((price - prev_close) / prev_close) * 100
 
         score = 0
-        # === FILTRE GAP ASYMÉTRIQUE (Recommandation 2) ===
         if 2 <= gap <= 40:
             direction = "LONG"
             score += 1
@@ -856,14 +820,13 @@ def analyze_stock(ticker, verbose=True):
         avg_vol = info.get("averageVolume", volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
 
-        # === FILTRE VOLUME ASYMÉTRIQUE (Recommandation 2) ===
         vol_threshold = SHORT_VOL_MIN if direction == "SHORT" else 0.8
         if vol_ratio > vol_threshold:
             score += 1
         else:
             if verbose and direction == "SHORT":
                 print(f"  ❌ SHORT: vol_ratio {vol_ratio:.2f} < {SHORT_VOL_MIN}", flush=True)
-            return None if direction == "SHORT" else None
+            return None
 
         float_shares = info.get("floatShares")
         if float_shares is not None and float_shares < 100_000_000:
@@ -909,7 +872,8 @@ def analyze_stock(ticker, verbose=True):
         if verbose:
             print(f"     🏛️ Inst. Interest: {inst_score}/10", flush=True)
 
-        vwap, poc = get_vwap_poc(ticker)
+        # >>> VWAP/POC via module externe (direction-aware) <<<
+        vwap, poc, vwap_verdict = get_vwap_poc(ticker, price, direction)
         if vwap is not None:
             vwap = round(vwap, 2)
         if poc is not None:
@@ -929,7 +893,6 @@ def analyze_stock(ticker, verbose=True):
         sl_brut = 2.0 if score >= 6 else 2.5
         tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(tp_brut, sl_brut, spread_pct, vol_ratio, cap_category, gap, held_pct)
 
-        # === ÉLARGISSEMENT ASYMÉTRIQUE DU SL SHORT (Recommandation 3) ===
         if direction == "SHORT":
             sl_adj += SHORT_SL_WIDENING
             trail_adj += SHORT_TRAIL_WIDENING
@@ -953,6 +916,7 @@ def analyze_stock(ticker, verbose=True):
             "trail_pct": round(trail, 2), "tp_pct": round(tp_final, 2),
             "sl_pct": round(sl_final, 2), "inst_interest": inst_score,
             "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
+            "vwap_verdict": vwap_verdict,
             "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated"
         }
     except Exception as e:
@@ -1000,7 +964,6 @@ def analyze_etf(ticker):
         aum = info.get("totalAssets", 0) or info.get("assetsUnderManagement", 0)
 
         score = 0
-        # === FILTRE GAP ASYMÉTRIQUE ETF (Recommandation 2) ===
         if 0.5 <= gap <= 8:
             direction = "LONG"
             score += 1
@@ -1030,11 +993,14 @@ def analyze_etf(ticker):
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
         inst_score, _ = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
-        vwap, poc = get_vwap_poc(ticker)
+
+        # >>> VWAP/POC via module externe (direction-aware) <<<
+        vwap, poc, vwap_verdict = get_vwap_poc(ticker, price, direction)
         if vwap is not None:
             vwap = round(vwap, 2)
         if poc is not None:
             poc = round(poc, 2)
+
         short_ratio = info.get("shortRatio", None)
 
         if abs(gap) >= 6:
@@ -1047,7 +1013,6 @@ def analyze_etf(ticker):
         held_pct = info.get("heldPercentInstitutions", 0.5) or 0.5
         tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(tp_brut, sl_brut, spread_pct, vol_ratio, "Large Cap", gap, held_pct)
 
-        # === ÉLARGISSEMENT ASYMÉTRIQUE DU SL SHORT (Recommandation 3) ===
         if direction == "SHORT":
             sl_adj += SHORT_SL_WIDENING
             trail_adj += SHORT_TRAIL_WIDENING
@@ -1071,6 +1036,7 @@ def analyze_etf(ticker):
             "trail_pct": round(trail, 2), "tp_pct": round(tp_final, 2),
             "sl_pct": round(sl_final, 2), "inst_interest": inst_score,
             "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
+            "vwap_verdict": vwap_verdict,
             "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated"
         }
     except Exception as e:
@@ -1174,14 +1140,19 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
     msg += f"   GAP: {gap_display} | Volume: x{data['vol_ratio']:.2f} | Short ratio: {short_display}\n"
     msg += f"   VWAP: {vwap_display} | POC: {poc_display}"
+
+    vwap_verdict = data.get("vwap_verdict", "")
+    if vwap_verdict:
+        msg += f"\n   {vwap_verdict}"
+
     if is_etf:
-        msg += f" | AUM: {data.get('aum_m', 0):.1f}M$"
+        msg += f"\n   AUM: {data.get('aum_m', 0):.1f}M$"
     if cap_display:
-        msg += f" | Cap: {cap_display}"
+        msg += f"\n   Cap: {cap_display}"
     msg += "\n"
     msg += f"   Market Bias: {bias}\n"
     msg += f"   🏛️ Institutional Interest: {inst}/10 ({inst_label})\n"
-    msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text} | Conviction: {conv_emoji} {conv_label} | Rank: {rank}\n"
+    msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text} | CONVICTION: {conv_emoji} {conv_label} | RANK: {rank}\n"
     msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
     msg += f"   📦 QUANTITY: {qty} {'shares' if not is_etf else 'units'}\n"
     msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} ({gain_display})\n"
@@ -1237,11 +1208,6 @@ def main():
     if early_close:
         print(f"⚠️ Fermeture anticipée – Marché ferme à {early_hour}:00 ET.", flush=True)
 
-    # =========================================================
-    # HORAIRES COMPLETS
-    # AM : 09:25 → 11:30 (scans à 09:30, 10:30, 11:30)
-    # PM : 14:00 → 15:00 (scans à 14:00, 15:00)
-    # =========================================================
     if 9 <= heure <= 11 and (heure < 11 or minute <= 35):
         session = "morning"
         start_hour, start_min = 9, 25
@@ -1282,20 +1248,13 @@ def main():
             send_telegram(msg)
         return
 
-    # =========================================================
-    # ATTENTE DU DÉBUT DE SESSION SI LANCÉ TROP TÔT
-    # =========================================================
     now = datetime.now(MONTREAL_TZ)
     if now.hour < start_hour or (now.hour == start_hour and now.minute < start_min):
         wait_until_target(start_hour, start_min)
 
-    # =========================================================
-    # BOUCLE PRINCIPALE
-    # =========================================================
     while True:
         now = datetime.now(MONTREAL_TZ)
 
-        # Fin de session
         if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
             print(f"⏹️ Fin de session ({end_hour:02d}:{end_min:02d}) – Arrêt.", flush=True)
             send_session_end_message(now, session)
@@ -1303,7 +1262,6 @@ def main():
 
         current_hour, current_min = now.hour, now.minute
 
-        # Vérifier si on est dans un créneau de scan (tolérance 5 min)
         is_scan_time = False
         current_total = current_hour * 60 + current_min
         for h, m in zip(scan_hours, scan_minutes):
@@ -1315,7 +1273,6 @@ def main():
         if is_scan_time:
             print(f"\n📊 Scan à {now.strftime('%H:%M')} (session {session})", flush=True)
 
-            # ---- STOCKS ----
             stocks_results = []
             for ticker in STOCK_TICKERS:
                 print(f"  - {ticker}:", flush=True)
@@ -1326,7 +1283,6 @@ def main():
                 else:
                     print("    ❌", flush=True)
 
-            # ---- ETFs ----
             etfs_results = []
             for ticker in ETF_TICKERS:
                 print(f"  - {ticker}...", end=" ", flush=True)
@@ -1337,7 +1293,6 @@ def main():
                 else:
                     print("❌", flush=True)
 
-            # ---- SYNTHETIC L2 ----
             print("\n🧠 ================================", flush=True)
             print("🧠 SYNTHETIC L2 — STOCKS", flush=True)
             print("🧠 ================================", flush=True)
@@ -1347,7 +1302,6 @@ def main():
             print("🧠 ================================", flush=True)
             etfs_results = enrich_with_synthetic_l2(etfs_results, is_etf=True)
 
-            # ---- SÉLECTION ----
             stock_long = [s for s in stocks_results if s["direction"] == "LONG"]
             stock_short = [s for s in stocks_results if s["direction"] == "SHORT"]
             etf_long = [e for e in etfs_results if e["direction"] == "LONG"]
@@ -1390,7 +1344,6 @@ def main():
                 best_pair = max(possible_pairs, key=lambda x: x[2])
                 selected_stock, selected_etf = best_pair[0], best_pair[1]
             else:
-                # ---- FALLBACK : UN SEUL setup (le meilleur global, toutes catégories confondues) ----
                 all_candidates = []
                 for s in stocks_results:
                     all_candidates.append((s, False))
@@ -1411,7 +1364,6 @@ def main():
                     else:
                         selected_stock = best_setup[0]
 
-            # ---- MESSAGE TELEGRAM ----
             msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
             msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
             msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
@@ -1436,7 +1388,6 @@ def main():
             msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
             send_telegram(msg)
 
-        # ---- PROCHAINE CIBLE ----
         next_scan_time = None
         for h, m in zip(scan_hours, scan_minutes):
             if h > current_hour or (h == current_hour and m > current_min):
