@@ -71,7 +71,7 @@ CONFIG = {
         "bonus_supportive": 1.5,
         "penalty_weak": -2.0,
         "penalty_bad": -4.0,
-        "priority_threshold_for_pair": 12.0
+        "priority_threshold_for_pair": 10.0
     },
 
     "short_adjustment": {
