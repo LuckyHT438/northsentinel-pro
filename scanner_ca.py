@@ -100,11 +100,11 @@ CONFIG = {
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
             "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO",
             "TD.TO", "CM.TO", "RY.TO",
-            "ENB.TO", "ARX.TO", "VET.TO", "PPL.TO", "TRP.TO",
+            "ENB.TO", "ARX.TO", "VET.TO", "PPL.TO",
             "BTO.TO", "FNV.TO", "HBM.TO", "AGI.TO", "NCM.TO",
             "SHOP.TO", "KEEL.TO",
             "WN.TO", "HPS-A.TO",
-            "ARTG.V", "TOI.V", "QNC.V",
+            "ARTG.V", "TOI.V", "ZDC.V", "QNC.V",
             "BTE.TO", "MEG.TO", "FR.TO", "SIL.TO", "EQB.TO", "TRI.TO", "GIL.TO"
         ],
         "etfs": [
@@ -113,7 +113,7 @@ CONFIG = {
             "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO", "HXS.TO",
             "HXQ.TO", "VFV.TO", "XQQ.TO", "HHL.TO", "TXF.TO",
             "HUTL.TO", "ZDI.TO", "VI.TO", "VRE.TO", "FIE.TO",
-            "ZDC.V", "ZWA.TO",
+            "XEI.V", "ZWA.TO",
             "XIU.TO", "ZCN.TO", "HNU.TO", "HOU.TO", "ZUB.TO",
             "ZFL.TO", "DLR.TO", "ZWB.TO", "HXT.TO",
             "XSP.TO", "XEF.TO", "XEC.TO", "ZAG.TO"
