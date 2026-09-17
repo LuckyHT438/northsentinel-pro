@@ -100,12 +100,12 @@ CONFIG = {
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
             "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO",
             "TD.TO", "CM.TO", "RY.TO",
-            "ENB.TO", "ARX.TO", "VET.TO", "PPL.TO",
+            "ENB.TO", "ARX.TO", "VET.TO", "TRP.TO", "PPL.TO",
             "BTO.TO", "FNV.TO", "HBM.TO", "AGI.TO", "NCM.TO",
             "SHOP.TO", "KEEL.TO",
             "WN.TO", "HPS-A.TO",
             "ARTG.V", "TOI.V", "ZDC.V", "QNC.V",
-            "BTE.TO", "MEG.TO", "FR.TO", "SIL.TO", "EQB.TO", "TRI.TO", "GIL.TO"
+            "BTE.TO", "FR.TO", "SIL.TO", "EQB.TO", "TRI.TO", "GIL.TO"
         ],
         "etfs": [
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
