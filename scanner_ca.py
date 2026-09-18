@@ -116,7 +116,7 @@ CONFIG = {
             "XEI.TO", "ZWA.TO",
             "XIU.TO", "ZCN.TO", "HNU.TO", "HOU.TO", "ZUB.TO",
             "ZFL.TO", "DLR.TO", "ZWB.TO", "HXT.TO",
-            "XSP.TO", "XEF.TO", "XEC.TO", "ZAG.TO"
+            "MSTE.TO", "XEF.TO", "XEC.TO", "ZAG.TO"
         ]
     }
 }
