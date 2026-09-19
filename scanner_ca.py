@@ -113,10 +113,10 @@ CONFIG = {
             "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO", "HXS.TO",
             "HXQ.TO", "VFV.TO", "XQQ.TO", "HHL.TO", "TXF.TO",
             "HUTL.TO", "ZDI.TO", "VI.TO", "VRE.TO", "FIE.TO",
-            "XEI.TO", "ZWA.TO",
+            "FBTC.TO", "ZWA.TO",
             "XIU.TO", "ZCN.TO", "HNU.TO", "HOU.TO", "ZUB.TO",
             "ZFL.TO", "DLR.TO", "ZWB.TO", "HXT.TO",
-            "MSTE.TO", "XEF.TO", "XEC.TO", "ZAG.TO"
+            "BTCC.TO", "XEF.TO", "XEC.TO", "ZAG.TO"
         ]
     }
 }
