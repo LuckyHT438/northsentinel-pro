@@ -8,6 +8,11 @@
 # - Verdict VWAP/POC adapté au sens du trade (LONG/SHORT)
 # - Conviction et Priority Rank alimentés par VWAP/POC réels
 # - Étiquettes CONVICTION et RANK en majuscules
+#
+# >>> CORRECTIF HEARTBEAT (2026-09-28) <<<
+# - wait_until_target() imprime un heartbeat toutes les 5 min
+#   pendant l'attente, pour empêcher GitHub Actions de tuer
+#   le runner silencieusement avant le scan de 11:30.
 # ============================================================
 
 import requests
@@ -1166,18 +1171,42 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
     return msg
 
 # ============================================================
-# ATTENTE
+# ATTENTE — AVEC HEARTBEAT ANTI-TIMEOUT
 # ============================================================
 
 def wait_until_target(target_hour, target_minute):
-    now = datetime.now(MONTREAL_TZ)
-    target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
-    if target <= now:
+    """
+    Attend jusqu'à l'heure cible en imprimant un heartbeat régulier.
+    >>> CORRECTIF 2026-09-28 <<<
+    GitHub Actions tue silencieusement le runner si le process
+    reste silencieux trop longtemps pendant un long sleep().
+    On dort donc par tranches de 30 secondes, et on imprime un
+    heartbeat toutes les 5 minutes pour rester "visible".
+    """
+    target = datetime.now(MONTREAL_TZ).replace(
+        hour=target_hour, minute=target_minute, second=0, microsecond=0
+    )
+    if target <= datetime.now(MONTREAL_TZ):
         target += timedelta(minutes=SCAN_INTERVAL)
-    diff = (target - now).total_seconds()
-    if diff > 0:
-        print(f"⏳ Attente jusqu'à {target.strftime('%H:%M')}... ({diff/60:.1f} min)", flush=True)
-        time.sleep(diff)
+
+    diff_init = (target - datetime.now(MONTREAL_TZ)).total_seconds()
+    print(f"⏳ Attente jusqu'à {target.strftime('%H:%M')}... ({diff_init/60:.1f} min)", flush=True)
+
+    last_heartbeat = datetime.now(MONTREAL_TZ)
+
+    while True:
+        now = datetime.now(MONTREAL_TZ)
+        if now >= target:
+            break
+        time.sleep(30)  # Réveil toutes les 30 secondes
+        now = datetime.now(MONTREAL_TZ)
+        if now >= target:
+            break
+        # Heartbeat toutes les 5 minutes
+        if (now - last_heartbeat).total_seconds() >= 300:
+            remaining = (target - now).total_seconds()
+            print(f"💤 ... encore {remaining/60:.1f} min avant {target.strftime('%H:%M')}", flush=True)
+            last_heartbeat = now
 
 # ============================================================
 # MAIN — BOUCLE CONTINUE (2 CRONS EXTERNES)
