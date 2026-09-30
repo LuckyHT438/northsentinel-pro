@@ -90,7 +90,7 @@ CONFIG = {
     "tickers": {
         "stocks": [
             "MFC.TO", "GWO.TO", "POW.TO", "SU.TO", "CNQ.TO",
-            "WCP.TO", "CCO.TO", "DOL.TO", "ABX.TO", "K.TO",
+            "WCP.TO", "CCO.TO", "ATH.TO", "ABX.TO", "K.TO",
             "LUN.TO", "FM.TO", "T.TO", "BCE.TO", "RCI-B.TO",
             "BB.TO", "LSPD.TO", "AC.TO", "CAE.TO",
             "BNS.TO",
@@ -105,7 +105,7 @@ CONFIG = {
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
             "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO",
             "TD.TO", "CM.TO", "AQN.TO",
-            "ENB.TO", "ARX.TO", "VET.TO", "BB.TO", "PPL.TO",
+            "ENB.TO", "ARX.TO", "VET.TO", "BB.TO", "TCW.TO",
             "BTO.TO", "IVN.TO", "HBM.TO", "AGI.TO", "NCM.TO",
             "SHOP.TO", "KEEL.TO",
             "WN.TO", "HPS-A.TO",
