@@ -1,18 +1,30 @@
 # ============================================================
 # NORTHSENTINEL CA ONLY — SCANNER INTRADAY CONTINU (BOUCLE)
 # SHORTS + LONGS — 3 SOURCES DE NEWS
-# VERSION FINALE AVEC SYNTHETIC L2 (INTERNE) + PAIRES OPPOSÉES CONDITIONNELLES
+# VERSION TP UNIQUE ANCRÉ STRUCTURELLEMENT
 #
-# >>> CORRECTIF VWAP/POC (2026-09-13) <<<
-# - VWAP/POC via module local pro_volume_profile (direction-aware)
-# - Verdict VWAP/POC adapté au sens du trade (LONG/SHORT)
-# - Conviction et Priority Rank alimentés par VWAP/POC réels
-# - Étiquettes CONVICTION et RANK en majuscules
+# 2 CRONS EXTERNES :
+#   - AM : déclenché à 09:30 ET → scans 09:45, 10:30, 11:15
+#   - PM : déclenché à 14:00 ET → scans 14:00, 15:00
 #
-# >>> CORRECTIF HEARTBEAT (2026-09-28) <<<
-# - wait_until_target() imprime un heartbeat toutes les 5 min
-#   pendant l'attente, pour empêcher GitHub Actions de tuer
-#   le runner silencieusement avant le scan de 11:30.
+# SYNTHETIC L2 : utilisé pour la confirmation / Priority Rank / conviction.
+# Aucun affichage dans le message Telegram.
+#
+# >>> TP UNIQUE STRUCTUREL (2026-10-02) <<<
+# Le TP est désormais TOUJOURS ancré sur un niveau de marché réel.
+#   - L'ATR quotidien fournit une distance de référence
+#   - Le script cherche un niveau structurel dans la fenêtre
+#     [0.7 × ATR_ref, 1.5 × ATR_ref]
+#   - Contrainte de R/R minimum (du régime) appliquée
+#   - Si aucun niveau valide → REJET du setup (plus de fallback arbitraire)
+#   - Le message affiche la source du TP entre crochets : [VWAP], [ORB-H], etc.
+#
+# >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
+# >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
+# >>> AMÉLIORATIONS #2 / #7 <<<
+# >>> FERMETURE IMMÉDIATE APRÈS LE DERNIER SCAN <<<
+# >>> HEARTBEAT ANTI-TIMEOUT <<<
+# >>> GARDE-FOUS DIRECTIONNELS (DÉSACTIVÉS PAR DÉFAUT) <<<
 # ============================================================
 
 import requests
@@ -31,20 +43,9 @@ import pytz
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# >>> MODULE EXTERNE VWAP/POC (calcul local yfinance, direction-aware) <<<
-from pro_volume_profile import get_volume_profile
-
-# ============================================================
-# SILENCE DES WARNINGS YFINANCE
-# ============================================================
-
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 logging.getLogger("urllib3").setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore")
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 CONFIG = {
     "market": "CA",
@@ -58,6 +59,38 @@ CONFIG = {
     "price_max_stocks": 300.00,
     "price_max_etfs": 300.00,
     "scan_interval_minutes": 60,
+
+    "position_management": {
+        "qty1_pct": 100.0,
+        "qty2_pct": 0.0,
+        "ibkr_pricing_model": "tiered",
+        "ibkr_tiered_commission_per_share": 0.008,
+        "ibkr_fixed_commission_per_share": 0.010,
+        "ibkr_min_commission_per_order": 1.00,
+        "ibkr_clearing_per_share": 0.00017,
+        "ibkr_clearing_cap_per_order": 2.00,
+        "ibkr_regulatory_per_share": 0.00011,
+        "ibkr_regulatory_cap_per_order": 3.30,
+        "fee_safety_buffer_per_order": 1.00,
+        "fee_safe_trailing": True
+    },
+
+    "technical_structure": {
+        "enabled": True,
+        "intraday_period": "5d",
+        "intraday_interval": "5m",
+        "lookback_bars": 48,
+        "swing_window": 3,
+        "structure_buffer_atr": 0.35,
+        "min_sl_atr": 0.70,
+        "max_sl_atr": 3.00,
+        "min_sl_pct": 0.50,
+        "max_sl_pct": 3.00,
+        "breakout_tolerance_pct": 0.35,
+        "support_resistance_tolerance_pct": 0.50,
+        "reject_if_structure_unavailable": True,
+        "require_room_to_tp": True
+    },
 
     "synthetic_l2": {
         "enabled": True,
@@ -76,7 +109,12 @@ CONFIG = {
         "bonus_supportive": 1.5,
         "penalty_weak": -2.0,
         "penalty_bad": -4.0,
-        "priority_threshold_for_pair": 10.0
+        "priority_threshold_for_pair": 12.0
+    },
+
+    "direction_control": {
+        "enable_longs": True,
+        "enable_shorts": True,
     },
 
     "short_adjustment": {
@@ -84,7 +122,54 @@ CONFIG = {
         "trail_widening_pct": 0.2,
         "gap_min_short": -2.5,
         "vol_ratio_min_short": 0.9,
-        "etf_gap_min_short": -0.75
+        "etf_gap_min_short": -0.75,
+        "price_max_short_stock": 999.0,
+        "price_max_short_etf": 999.0,
+    },
+
+    "regime": {
+        "enabled": True,
+        "benchmark_ticker": "^GSPTSE",
+        "lookback_period": "6mo",
+        "adx_period": 14,
+        "atr_period": 14,
+        "atr_percentile_window": 60,
+        "trend_adx_threshold": 20,
+        "high_vol_atr_percentile": 75,
+        "low_vol_atr_percentile": 25,
+        "counter_trend_gap_penalty": 0.5,
+        "choppy_score_penalty": 1,
+        "sl_mult_high_vol": 1.25,
+        "sl_mult_low_vol": 0.90,
+        "tp_mult_ranging": 0.90,
+        "min_rr_by_regime": {
+            "Trending-Up": 1.6,
+            "Trending-Down": 1.6,
+            "Ranging": 2.0,
+            "Choppy-Volatile": 2.5,
+            "Unknown": 2.0
+        },
+        "min_rr_default": 2.0
+    },
+
+    "intraday_filters": {
+        "timing_penalty_windows": [
+            {"start_min": 570, "end_min": 585, "penalty": 1},   # 09:30–09:45
+        ],
+
+        "rvol_enabled": True,
+        "rvol_strong_threshold": 2.0,
+        "rvol_moderate_threshold": 1.2,
+        "rvol_weak_threshold": 0.8,
+        "rvol_reject_below": 0.5,
+        "rvol_bonus_strong": 1.5,
+        "rvol_bonus_moderate": 0.5,
+        "rvol_penalty_weak": -1.0,
+        "rvol_apply_reject_after_min": 585,
+
+        "structural_tp_enabled": True,
+        "structural_tp_atr_lower_mult": 0.7,
+        "structural_tp_atr_upper_mult": 1.5,
     },
 
     "tickers": {
@@ -126,18 +211,10 @@ CONFIG = {
     }
 }
 
-# ============================================================
-# PARAMÈTRES GLOBAUX
-# ============================================================
-
 MONTREAL_TZ = pytz.timezone("America/Toronto")
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_CA_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CA_CHAT_ID")
-
-# Variables conservées (non utilisées depuis le correctif VWAP/POC)
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY")
-ALPHAVANTAGE_API_KEY = os.environ.get("ALPHAVANTAGE_API_KEY")
 
 GITHUB_EVENT = os.environ.get("GITHUB_EVENT_NAME", "")
 IS_MANUAL_RUN = (GITHUB_EVENT == "workflow_dispatch") or sys.stdin.isatty()
@@ -152,9 +229,32 @@ PRICE_MIN_STOCKS = CONFIG["price_min_stocks"]
 PRICE_MAX_STOCKS = CONFIG["price_max_stocks"]
 PRICE_MAX_ETFS = CONFIG["price_max_etfs"]
 SCAN_INTERVAL = CONFIG["scan_interval_minutes"]
+
+POSITION_CONFIG = CONFIG["position_management"]
+QTY1_PCT = float(POSITION_CONFIG["qty1_pct"])
+QTY2_PCT = float(POSITION_CONFIG["qty2_pct"])
+IBKR_PRICING_MODEL = POSITION_CONFIG["ibkr_pricing_model"].lower()
+IBKR_TIERED_COMMISSION = float(POSITION_CONFIG["ibkr_tiered_commission_per_share"])
+IBKR_FIXED_COMMISSION = float(POSITION_CONFIG["ibkr_fixed_commission_per_share"])
+IBKR_MIN_COMMISSION = float(POSITION_CONFIG["ibkr_min_commission_per_order"])
+IBKR_CLEARING_PER_SHARE = float(POSITION_CONFIG["ibkr_clearing_per_share"])
+IBKR_CLEARING_CAP = float(POSITION_CONFIG["ibkr_clearing_cap_per_order"])
+IBKR_REGULATORY_PER_SHARE = float(POSITION_CONFIG["ibkr_regulatory_per_share"])
+IBKR_REGULATORY_CAP = float(POSITION_CONFIG["ibkr_regulatory_cap_per_order"])
+IBKR_FEE_BUFFER = float(POSITION_CONFIG["fee_safety_buffer_per_order"])
+FEE_SAFE_TRAILING = bool(POSITION_CONFIG["fee_safe_trailing"])
+TECH_STRUCTURE_CONFIG = CONFIG["technical_structure"]
+
+if QTY1_PCT <= 0 or QTY2_PCT < 0 or abs((QTY1_PCT + QTY2_PCT) - 100.0) > 1e-9:
+    raise ValueError("position_management.qty1_pct + qty2_pct doit être égal à 100%.")
+if IBKR_PRICING_MODEL not in {"tiered", "fixed"}:
+    raise ValueError("ibkr_pricing_model doit être 'tiered' ou 'fixed'.")
 STOCK_TICKERS = CONFIG["tickers"]["stocks"]
 ETF_TICKERS = CONFIG["tickers"]["etfs"]
 SYNTHETIC_L2_CONFIG = CONFIG["synthetic_l2"]
+REGIME_CONFIG = CONFIG["regime"]
+INTRADAY_FILTERS = CONFIG["intraday_filters"]
+DIRECTION_CONTROL = CONFIG["direction_control"]
 
 SHORT_ADJ = CONFIG["short_adjustment"]
 SHORT_SL_WIDENING = SHORT_ADJ["sl_widening_pct"]
@@ -162,15 +262,31 @@ SHORT_TRAIL_WIDENING = SHORT_ADJ["trail_widening_pct"]
 SHORT_GAP_MIN = SHORT_ADJ["gap_min_short"]
 SHORT_VOL_MIN = SHORT_ADJ["vol_ratio_min_short"]
 SHORT_ETF_GAP_MIN = SHORT_ADJ["etf_gap_min_short"]
+SHORT_PRICE_MAX_STOCK = SHORT_ADJ.get("price_max_short_stock", 999.0)
+SHORT_PRICE_MAX_ETF = SHORT_ADJ.get("price_max_short_etf", 999.0)
+
+_TP_SOURCE_ABBR = {
+    "VWAP": "VWAP",
+    "POC": "POC",
+    "ORB-High": "ORB-H",
+    "ORB-Low": "ORB-L",
+    "PriorHigh": "PDH",
+    "PriorLow": "PDL",
+    "SwingHigh": "SwH",
+    "SwingLow": "SwL",
+    "Structure": "Struct",
+    "Round0.10": "R0.10",
+    "Round0.25": "R0.25",
+    "Round0.50": "R0.50",
+    "Round1.00": "R1.00",
+    "Round5.00": "R5.00",
+    "Round10.00": "R10.00",
+}
 
 RSS_FEEDS = [
     "https://www.cbc.ca/webfeed/rss/rss-business",
     "https://business.financialpost.com/feed/"
 ]
-
-# ============================================================
-# SESSION HTTP
-# ============================================================
 
 def create_session():
     session = requests.Session()
@@ -184,10 +300,6 @@ def create_session():
     return session
 
 HTTP_SESSION = create_session()
-
-# ============================================================
-# TELEGRAM
-# ============================================================
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN:
@@ -219,10 +331,6 @@ def send_session_end_message(now, session):
         "<i>Informational automated signal. Not financial or trading advice.</i>"
     )
     send_telegram(msg)
-
-# ============================================================
-# JOURS FÉRIÉS ET EARLY CLOSE
-# ============================================================
 
 def _adjust_weekend(d):
     if d.weekday() == 5:
@@ -299,10 +407,6 @@ def get_early_close_hour(check_date):
         check_date = check_date.date()
     return _build_early_close_dates(check_date.year).get(check_date)
 
-# ============================================================
-# NEWS
-# ============================================================
-
 def get_news_for_ticker(ticker):
     all_news = []
     ticker_clean = ticker.replace(".TO", "").replace(".V", "").upper()
@@ -366,38 +470,174 @@ def analyze_sentiment(title):
         score -= 1
     return score
 
-# ============================================================
-# VWAP / POC — MODULE EXTERNE (calcul local yfinance, direction-aware)
-# ============================================================
+from pro_volume_profile import get_volume_profile
 
 def get_vwap_poc(ticker, current_price, direction="LONG"):
-    """
-    Récupère VWAP, POC et ligne verdict via le module pro_volume_profile.
-    La direction est passée au module pour adapter le verdict (LONG/SHORT).
-    Retourne (vwap, poc, verdict_line).
-    """
+    profile = get_volume_profile(ticker, current_price, direction)
+    return profile.get("vwap"), profile.get("poc")
+
+def calculate_adx_atr(df, period=14):
+    high = df["High"].astype(float)
+    low = df["Low"].astype(float)
+    close = df["Close"].astype(float)
+
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    atr = tr.rolling(period).mean()
+    plus_di = 100 * (plus_dm.rolling(period).mean() / atr.replace(0, pd.NA))
+    minus_di = 100 * (minus_dm.rolling(period).mean() / atr.replace(0, pd.NA))
+
+    di_sum = (plus_di + minus_di).replace(0, pd.NA)
+    dx = 100 * (plus_di - minus_di).abs() / di_sum
+    adx = dx.rolling(period).mean()
+
+    adx_val = adx.dropna().iloc[-1] if len(adx.dropna()) > 0 else None
+    atr_val = atr.dropna().iloc[-1] if len(atr.dropna()) > 0 else None
+    return adx_val, atr_val
+
+def _default_regime():
+    return {
+        "regime": "Unknown",
+        "bias": "⚪ Neutral",
+        "volatility": "Normal",
+        "adx": None,
+        "atr_pct": None,
+        "atr_percentile": None,
+        "trend_direction": "Flat",
+        "score_min_stock_adj": 0,
+        "score_min_etf_adj": 0,
+        "gap_min_long_adj": 0.0,
+        "gap_min_short_adj": 0.0,
+        "sl_mult_adj": 1.0,
+        "tp_mult_adj": 1.0
+    }
+
+def detect_market_regime(verbose=True):
+    default = _default_regime()
+    if not REGIME_CONFIG.get("enabled", True):
+        return default
     try:
-        result = get_volume_profile(ticker, current_price, direction)
-        vwap = result.get("vwap")
-        poc = result.get("poc")
+        idx = yf.Ticker(REGIME_CONFIG["benchmark_ticker"], session=HTTP_SESSION)
+        hist = idx.history(period=REGIME_CONFIG["lookback_period"], interval="1d")
+        if hist is None or hist.empty or len(hist) < 30:
+            if verbose:
+                print("⚠️ Régime: historique indice insuffisant, fallback Neutral.", flush=True)
+            return default
 
-        verdict_line = ""
-        line = result.get("line", "")
-        if line:
-            for part in line.split("\n"):
-                stripped = part.strip()
-                if stripped.startswith("📐"):
-                    verdict_line = stripped
-                    break
+        close = hist["Close"].astype(float)
+        adx, atr = calculate_adx_atr(hist, REGIME_CONFIG["adx_period"])
 
-        return vwap, poc, verdict_line
+        sma20 = close.rolling(20).mean()
+        sma50 = close.rolling(50).mean() if len(close) >= 50 else None
+        current_price = close.iloc[-1]
+
+        atr_pct_series = ((hist["High"] - hist["Low"]).rolling(REGIME_CONFIG["atr_period"]).mean() / close) * 100
+        atr_pct_series = atr_pct_series.dropna()
+        current_atr_pct = atr_pct_series.iloc[-1] if len(atr_pct_series) > 0 else None
+        atr_percentile = None
+        if current_atr_pct is not None and len(atr_pct_series) >= REGIME_CONFIG["atr_percentile_window"]:
+            window = atr_pct_series.tail(REGIME_CONFIG["atr_percentile_window"])
+            atr_percentile = float((window < current_atr_pct).mean() * 100)
+
+        trend_direction = "Flat"
+        if sma50 is not None and not sma50.isna().iloc[-1] and not sma20.isna().iloc[-1]:
+            if current_price > sma20.iloc[-1] > sma50.iloc[-1]:
+                trend_direction = "Up"
+            elif current_price < sma20.iloc[-1] < sma50.iloc[-1]:
+                trend_direction = "Down"
+
+        if atr_percentile is not None:
+            if atr_percentile >= REGIME_CONFIG["high_vol_atr_percentile"]:
+                volatility = "High"
+            elif atr_percentile <= REGIME_CONFIG["low_vol_atr_percentile"]:
+                volatility = "Low"
+            else:
+                volatility = "Normal"
+        else:
+            volatility = "Normal"
+
+        is_trending = adx is not None and adx >= REGIME_CONFIG["trend_adx_threshold"]
+        if is_trending and trend_direction == "Up":
+            regime = "Trending-Up"
+            bias = "🟢 Risk-on"
+        elif is_trending and trend_direction == "Down":
+            regime = "Trending-Down"
+            bias = "🔴 Risk-off"
+        elif volatility == "High":
+            regime = "Choppy-Volatile"
+            bias = "⚪ Neutral"
+        else:
+            regime = "Ranging"
+            bias = "⚪ Neutral"
+
+        gap_penalty = REGIME_CONFIG["counter_trend_gap_penalty"]
+        score_min_stock_adj = 0
+        score_min_etf_adj = 0
+        gap_min_long_adj = 0.0
+        gap_min_short_adj = 0.0
+        sl_mult_adj = 1.0
+        tp_mult_adj = 1.0
+
+        if regime == "Trending-Up":
+            gap_min_short_adj = gap_penalty
+        elif regime == "Trending-Down":
+            gap_min_long_adj = gap_penalty
+        elif regime == "Choppy-Volatile":
+            score_min_stock_adj = REGIME_CONFIG["choppy_score_penalty"]
+            score_min_etf_adj = REGIME_CONFIG["choppy_score_penalty"]
+        elif regime == "Ranging":
+            tp_mult_adj = REGIME_CONFIG["tp_mult_ranging"]
+
+        if volatility == "High":
+            sl_mult_adj = max(sl_mult_adj, REGIME_CONFIG["sl_mult_high_vol"])
+        elif volatility == "Low":
+            sl_mult_adj = min(sl_mult_adj, REGIME_CONFIG["sl_mult_low_vol"])
+
+        result = {
+            "regime": regime,
+            "bias": bias,
+            "volatility": volatility,
+            "adx": round(float(adx), 1) if adx is not None else None,
+            "atr_pct": round(float(current_atr_pct), 2) if current_atr_pct is not None else None,
+            "atr_percentile": round(atr_percentile, 0) if atr_percentile is not None else None,
+            "trend_direction": trend_direction,
+            "score_min_stock_adj": score_min_stock_adj,
+            "score_min_etf_adj": score_min_etf_adj,
+            "gap_min_long_adj": gap_min_long_adj,
+            "gap_min_short_adj": gap_min_short_adj,
+            "sl_mult_adj": round(sl_mult_adj, 2),
+            "tp_mult_adj": round(tp_mult_adj, 2)
+        }
+        if verbose:
+            print(
+                f"🧭 RÉGIME: {result['regime']} | Bias: {result['bias']} | "
+                f"Vol: {result['volatility']} | ADX: {result['adx']} | "
+                f"ATR%: {result['atr_pct']} (percentile: {result['atr_percentile']})",
+                flush=True
+            )
+        return result
     except Exception as e:
-        print(f"  ⚠️ VWAP/POC indisponible ({ticker}): {e}", flush=True)
-        return None, None, ""
+        if verbose:
+            print(f"⚠️ Régime indisponible, fallback Neutral: {e}", flush=True)
+        return default
 
-# ============================================================
-# SYNTHETIC L2 ENGINE
-# ============================================================
+def get_timing_penalty():
+    now = datetime.now(MONTREAL_TZ)
+    total = now.hour * 60 + now.minute
+    penalty = 0
+    for w in INTRADAY_FILTERS.get("timing_penalty_windows", []):
+        if w["start_min"] <= total < w["end_min"]:
+            penalty += w["penalty"]
+    return penalty
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
@@ -534,10 +774,6 @@ def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=No
             print(f"     ⚠️ Synthetic L2 indisponible: {e}", flush=True)
         return neutral_result
 
-# ============================================================
-# SCORE INSTITUTIONNEL
-# ============================================================
-
 def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     score = 0
     details = {}
@@ -581,10 +817,6 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     details["total"] = score
     return score, details
 
-# ============================================================
-# CONVICTION
-# ============================================================
-
 def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_interest, market_bias, poc=None, synthetic_l2_score=50):
     bias = market_bias.replace("⚪ ", "").replace("🟢 ", "").replace("🔴 ", "").strip()
     green_count = 0
@@ -622,10 +854,6 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
             return "Moderate", "🔵"
         else:
             return "Low", "🟡"
-
-# ============================================================
-# PRIORITY RANK
-# ============================================================
 
 def get_verdict(confidence):
     if confidence >= 8.5:
@@ -682,11 +910,19 @@ def calculate_priority_score(data, market_bias, is_etf=False):
     l2_component = l2_confirmation_bonus(l2_score)
 
     total = (v_score * 2.5) + (c_score * 2.5) + (q_score * 2.0) + (gap_score * 1.5) + (vwap_score * 1.5) + bias_score + l2_component
-    return round(total, 2)
 
-# ============================================================
-# FONCTIONS D'ANALYSE
-# ============================================================
+    rvol = data.get("rvol_intraday")
+    rvol_adj = 0.0
+    if rvol is not None and INTRADAY_FILTERS.get("rvol_enabled", True):
+        if rvol >= INTRADAY_FILTERS["rvol_strong_threshold"]:
+            rvol_adj = INTRADAY_FILTERS["rvol_bonus_strong"]
+        elif rvol >= INTRADAY_FILTERS["rvol_moderate_threshold"]:
+            rvol_adj = INTRADAY_FILTERS["rvol_bonus_moderate"]
+        elif rvol < INTRADAY_FILTERS["rvol_weak_threshold"]:
+            rvol_adj = INTRADAY_FILTERS["rvol_penalty_weak"]
+
+    total += rvol_adj
+    return round(total, 2)
 
 def get_market_cap_category(ticker):
     try:
@@ -729,9 +965,75 @@ def get_confidence_score(score, vol_ratio, gap, cap_category):
         conf += 0.5
     return min(round(conf, 1), 10.0)
 
-# ============================================================
-# GESTION DES RISQUES
-# ============================================================
+def calculate_atr_pct_from_ohlc(high, low, close, period=14):
+    try:
+        tr1 = high - low
+        tr2 = (high - close.shift()).abs()
+        tr3 = (low - close.shift()).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr_series = tr.rolling(period).mean().dropna()
+        if len(atr_series) == 0:
+            return None
+        last_close = close.iloc[-1]
+        if not last_close or last_close <= 0:
+            return None
+        return float(atr_series.iloc[-1] / last_close * 100)
+    except Exception:
+        return None
+
+def _prior_day_hl_from_daily(hist):
+    if hist is None or len(hist) < 2:
+        return None, None
+    try:
+        today = datetime.now(MONTREAL_TZ).date()
+        last_bar_date = hist.index[-1].date() if hasattr(hist.index[-1], "date") else None
+        idx = -2 if last_bar_date == today else -1
+        if abs(idx) > len(hist):
+            return None, None
+        return float(hist["High"].iloc[idx]), float(hist["Low"].iloc[idx])
+    except Exception:
+        return None, None
+
+def get_daily_context(ticker, period=14, verbose=False):
+    try:
+        hist = yf.Ticker(ticker, session=HTTP_SESSION).history(period="2mo", interval="1d")
+        if hist is None or hist.empty or len(hist) < period + 1:
+            return None
+        atr_pct = calculate_atr_pct_from_ohlc(
+            hist["High"].astype(float), hist["Low"].astype(float), hist["Close"].astype(float), period
+        )
+        prior_high, prior_low = _prior_day_hl_from_daily(hist)
+        return {"atr_pct": atr_pct, "prior_high": prior_high, "prior_low": prior_low}
+    except Exception as e:
+        if verbose:
+            print(f"     ⚠️ Contexte daily indisponible pour {ticker}: {e}", flush=True)
+        return None
+
+def estimate_tp_pct_from_atr(atr_pct, gap, score, tp_mult_adj):
+    if atr_pct is None or atr_pct <= 0:
+        return None
+    if abs(gap) >= 20:
+        k_gap = 2.2
+    elif abs(gap) >= 10:
+        k_gap = 1.6
+    else:
+        k_gap = 1.1
+    quality_adj = clamp(1 + 0.05 * (score - 4), 0.7, 1.3)
+    return atr_pct * k_gap * quality_adj * tp_mult_adj
+
+def estimate_tp_pct_fallback(gap, score, tp_mult_adj):
+    if abs(gap) >= 20:
+        tp_brut = 2.0 + (score - 4) * 0.6
+    elif abs(gap) >= 10:
+        tp_brut = 1.5 + (score - 4) * 0.4
+    else:
+        tp_brut = 0.5 + (score - 4) * 0.2
+    return tp_brut * tp_mult_adj
+
+def get_min_rr_for_regime(regime):
+    regime_name = regime.get("regime", "Unknown")
+    table = REGIME_CONFIG.get("min_rr_by_regime", {})
+    return table.get(regime_name, REGIME_CONFIG.get("min_rr_default", 2.0))
 
 def adjust_risk_with_factors(base_tp_pct, base_sl_pct, spread_pct, vol_ratio, cap_category, gap, held_pct):
     tp_pct = base_tp_pct
@@ -763,16 +1065,6 @@ def adjust_risk_with_factors(base_tp_pct, base_sl_pct, spread_pct, vol_ratio, ca
     tp_pct = max(0.5, min(tp_pct, 8.0))
     return round(tp_pct, 2), round(sl_pct, 2), round(trail_adj, 2)
 
-def apply_risk_mandate(tp_pct, sl_pct, min_ratio=2.0):
-    required_tp = sl_pct * min_ratio
-    if tp_pct < required_tp:
-        tp_pct = round(required_tp, 2)
-    if sl_pct < 0.5:
-        sl_pct = 0.5
-    tp_pct = min(tp_pct, 8.0)
-    sl_pct = min(sl_pct, 3.0)
-    return round(tp_pct, 2), round(sl_pct, 2)
-
 def compute_coherent_trailing(base_trail, trail_adj, sl_final):
     trail = base_trail + trail_adj
     trail = max(1.0, min(trail, 6.0))
@@ -780,11 +1072,289 @@ def compute_coherent_trailing(base_trail, trail_adj, sl_final):
     trail = max(trail, 0.3)
     return round(trail, 2)
 
-# ============================================================
-# ANALYSE STOCK
-# ============================================================
+def fetch_intraday_structure(ticker, period=None, interval=None):
+    if not TECH_STRUCTURE_CONFIG.get("enabled", True):
+        return None
+    try:
+        period = period or TECH_STRUCTURE_CONFIG["intraday_period"]
+        interval = interval or TECH_STRUCTURE_CONFIG["intraday_interval"]
+        hist = yf.Ticker(ticker, session=HTTP_SESSION).history(
+            period=period, interval=interval, prepost=False, auto_adjust=False
+        )
+        if hist is None or hist.empty:
+            return None
+        required = ["Open", "High", "Low", "Close", "Volume"]
+        if not all(c in hist.columns for c in required):
+            return None
+        hist = hist.dropna(subset=required).copy()
+        if hist.empty:
+            return None
+        try:
+            hist = hist.between_time("09:30", "16:00")
+        except Exception:
+            pass
+        return hist.tail(TECH_STRUCTURE_CONFIG["lookback_bars"])
+    except Exception:
+        return None
 
-def analyze_stock(ticker, verbose=True):
+def _intraday_atr(hist, period=14):
+    if hist is None or len(hist) < period + 1:
+        return None
+    try:
+        h = hist["High"].astype(float)
+        l = hist["Low"].astype(float)
+        c = hist["Close"].astype(float)
+        tr = pd.concat([(h-l), (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
+        atr = tr.rolling(period).mean().dropna()
+        return float(atr.iloc[-1]) if len(atr) else None
+    except Exception:
+        return None
+
+def detect_setup_structure(hist, price, direction, gap, vwap=None, poc=None):
+    if hist is None or len(hist) < 10 or price <= 0:
+        return None
+    look = hist.tail(TECH_STRUCTURE_CONFIG.get("lookback_bars", 48))
+    high_n = float(look["High"].tail(20).max())
+    low_n = float(look["Low"].tail(20).min())
+    high_10 = float(look["High"].tail(10).max())
+    low_10 = float(look["Low"].tail(10).min())
+    recent_high = float(look["High"].tail(6).max())
+    recent_low = float(look["Low"].tail(6).min())
+    atr = _intraday_atr(look)
+    if atr is None or atr <= 0:
+        return None
+
+    tol = TECH_STRUCTURE_CONFIG.get("breakout_tolerance_pct", 0.35) / 100.0
+    sr_tol = TECH_STRUCTURE_CONFIG.get("support_resistance_tolerance_pct", 0.50) / 100.0
+
+    if direction == "LONG":
+        if price >= high_10 * (1 - tol):
+            setup_type = "BREAKOUT"
+            structure = min(high_10, recent_low if recent_low < price else high_10)
+            invalidation = recent_low
+        elif vwap and price >= vwap and abs(price-vwap)/price <= sr_tol:
+            setup_type = "PULLBACK / CONTINUATION"
+            invalidation = recent_low
+            structure = vwap
+        elif poc and price >= poc and abs(price-poc)/price <= sr_tol:
+            setup_type = "SUPPORT / CONTINUATION"
+            invalidation = recent_low
+            structure = poc
+        else:
+            setup_type = "GAP CONTINUATION"
+            invalidation = recent_low
+            structure = low_n
+        return {
+            "setup_type": setup_type,
+            "structure_level": float(structure),
+            "invalidation_level": float(invalidation),
+            "recent_high": high_n,
+            "recent_low": low_n,
+            "atr": atr,
+        }
+    else:
+        if price <= low_10 * (1 + tol):
+            setup_type = "BREAKDOWN"
+            structure = max(low_10, recent_high if recent_high > price else low_10)
+            invalidation = recent_high
+        elif vwap and price <= vwap and abs(price-vwap)/price <= sr_tol:
+            setup_type = "PULLBACK / CONTINUATION"
+            invalidation = recent_high
+            structure = vwap
+        elif poc and price <= poc and abs(price-poc)/price <= sr_tol:
+            setup_type = "RESISTANCE / CONTINUATION"
+            invalidation = recent_high
+            structure = poc
+        else:
+            setup_type = "GAP CONTINUATION"
+            invalidation = recent_high
+            structure = high_n
+        return {
+            "setup_type": setup_type,
+            "structure_level": float(structure),
+            "invalidation_level": float(invalidation),
+            "recent_high": high_n,
+            "recent_low": low_n,
+            "atr": atr,
+        }
+
+def calculate_structural_sl(entry, direction, structure):
+    if not structure or entry <= 0:
+        return None
+    invalidation = structure.get("invalidation_level")
+    atr = structure.get("atr")
+    if invalidation is None or atr is None or atr <= 0:
+        return None
+    buffer = atr * float(TECH_STRUCTURE_CONFIG.get("structure_buffer_atr", 0.35))
+    if direction == "LONG":
+        stop = float(invalidation) - buffer
+        if stop <= 0 or stop >= entry:
+            return None
+    else:
+        stop = float(invalidation) + buffer
+        if stop <= entry:
+            return None
+    sl_dist = abs(entry-stop)
+    sl_pct = sl_dist / entry * 100.0
+    sl_atr = sl_dist / atr if atr > 0 else None
+    return {
+        "sl_price": round(stop, 4),
+        "sl_pct": sl_pct,
+        "sl_atr": sl_atr,
+        "buffer": buffer,
+    }
+
+def validate_sl_bounds_only(structural_sl):
+    if not structural_sl:
+        return None
+    sl_pct = float(structural_sl["sl_pct"])
+    sl_atr = structural_sl.get("sl_atr")
+    min_sl = float(TECH_STRUCTURE_CONFIG.get("min_sl_pct", 0.50))
+    max_sl = float(TECH_STRUCTURE_CONFIG.get("max_sl_pct", 3.00))
+    min_atr = float(TECH_STRUCTURE_CONFIG.get("min_sl_atr", 0.70))
+    max_atr = float(TECH_STRUCTURE_CONFIG.get("max_sl_atr", 3.00))
+    if sl_pct < min_sl or sl_pct > max_sl:
+        return None
+    if sl_atr is not None and (sl_atr < min_atr or sl_atr > max_atr):
+        return None
+    return round(sl_pct, 2)
+
+def _build_tp_candidates(entry, direction, vwap, poc, structure_hist,
+                         structure, daily_ctx):
+    candidates = []
+
+    if vwap and vwap > 0:
+        candidates.append((float(vwap), "VWAP"))
+    if poc and poc > 0:
+        candidates.append((float(poc), "POC"))
+
+    if daily_ctx:
+        if daily_ctx.get("prior_high"):
+            candidates.append((float(daily_ctx["prior_high"]), "PriorHigh"))
+        if daily_ctx.get("prior_low"):
+            candidates.append((float(daily_ctx["prior_low"]), "PriorLow"))
+
+    if structure_hist is not None and len(structure_hist) >= 6:
+        try:
+            orb = structure_hist.head(6)
+            candidates.append((float(orb["High"].max()), "ORB-High"))
+            candidates.append((float(orb["Low"].min()), "ORB-Low"))
+        except Exception:
+            pass
+
+    if structure:
+        for key, label in (("recent_high", "SwingHigh"),
+                           ("recent_low", "SwingLow"),
+                           ("structure_level", "Structure")):
+            v = structure.get(key)
+            if v:
+                candidates.append((float(v), label))
+
+    for delta in (0.10, 0.25, 0.50, 1.00, 5.00, 10.00):
+        if direction == "LONG":
+            c = round(entry / delta) * delta
+            if c <= entry:
+                c += delta
+        else:
+            c = round(entry / delta) * delta
+            if c >= entry:
+                c -= delta
+        if c > 0:
+            candidates.append((float(c), f"Round{delta}"))
+
+    return candidates
+
+def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
+                          min_rr, lower_mult=0.7, upper_mult=1.5, verbose=False):
+    if atr_tp_pct is None or atr_tp_pct <= 0 or entry <= 0 or sl_price <= 0:
+        return None, None
+    if not candidates:
+        return None, None
+
+    sl_pct = abs(entry - sl_price) / entry * 100
+    if sl_pct <= 0:
+        return None, None
+
+    ref_lo = atr_tp_pct * lower_mult
+    ref_hi = atr_tp_pct * upper_mult
+    min_dist_pct = sl_pct * min_rr
+    max_dist_pct = 8.0
+
+    valid = []
+    for price, label in candidates:
+        if price is None or price <= 0:
+            continue
+        if direction == "LONG":
+            if price <= entry:
+                continue
+            dist_pct = (price - entry) / entry * 100
+        else:
+            if price >= entry:
+                continue
+            dist_pct = (entry - price) / entry * 100
+
+        if dist_pct < min_dist_pct:
+            continue
+        if dist_pct > max_dist_pct:
+            continue
+        if not (ref_lo <= dist_pct <= ref_hi):
+            continue
+
+        valid.append((price, label, dist_pct))
+
+    if not valid:
+        if verbose:
+            print(f"     ❌ Aucun TP structurel dans [{ref_lo:.2f}%, {ref_hi:.2f}%] "
+                  f"avec R/R ≥ {min_rr:.1f}:1 (SL {sl_pct:.2f}%)", flush=True)
+        return None, None
+
+    valid.sort(key=lambda x: abs(x[2] - atr_tp_pct))
+    best_price, best_label, best_dist = valid[0]
+    return round(best_dist, 2), best_label
+
+def calculate_intraday_rvol_from_hist(hist):
+    if hist is None or hist.empty or not isinstance(hist.index, pd.DatetimeIndex):
+        return None
+    try:
+        h = hist.copy()
+        try:
+            h = h.between_time("09:30", "16:00")
+        except Exception:
+            pass
+        if h.empty:
+            return None
+        h["date"] = h.index.date
+        dates = sorted(h["date"].unique())
+        if len(dates) < 2:
+            return None
+
+        today = dates[-1]
+        today_bars = h[h["date"] == today]
+        if today_bars.empty:
+            return None
+
+        cutoff = today_bars.index[-1].time()
+        today_vol = float(today_bars["Volume"].sum())
+
+        prior_vols = []
+        for d in dates[:-1]:
+            day_bars = h[h["date"] == d]
+            before = day_bars[day_bars.index.time <= cutoff]
+            if not before.empty:
+                prior_vols.append(float(before["Volume"].sum()))
+
+        if len(prior_vols) < 2:
+            return None
+        avg_prior = sum(prior_vols) / len(prior_vols)
+        if avg_prior <= 0:
+            return None
+        return today_vol / avg_prior
+    except Exception:
+        return None
+
+def analyze_stock(ticker, regime=None, verbose=True):
+    if regime is None:
+        regime = _default_regime()
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
@@ -809,16 +1379,32 @@ def analyze_stock(ticker, verbose=True):
             return None
         gap = ((price - prev_close) / prev_close) * 100
 
+        gap_min_long = 2 + regime.get("gap_min_long_adj", 0.0)
+        gap_max_short = SHORT_GAP_MIN - regime.get("gap_min_short_adj", 0.0)
+
         score = 0
-        if 2 <= gap <= 40:
+        if gap_min_long <= gap <= 40:
             direction = "LONG"
             score += 1
-        elif -40 <= gap <= SHORT_GAP_MIN:
+        elif -40 <= gap <= gap_max_short:
             direction = "SHORT"
             score += 1
         else:
             if verbose:
-                print(f"  ❌ Gap {gap:.2f}% hors plage", flush=True)
+                print(f"  ❌ Gap {gap:.2f}% hors plage (régime: {regime.get('regime')})", flush=True)
+            return None
+
+        if direction == "LONG" and not DIRECTION_CONTROL.get("enable_longs", True):
+            if verbose:
+                print("  ❌ LONG désactivé via direction_control", flush=True)
+            return None
+        if direction == "SHORT" and not DIRECTION_CONTROL.get("enable_shorts", True):
+            if verbose:
+                print("  ❌ SHORT désactivé via direction_control", flush=True)
+            return None
+        if direction == "SHORT" and price > SHORT_PRICE_MAX_STOCK:
+            if verbose:
+                print(f"  ❌ SHORT: prix {price:.2f}$ > {SHORT_PRICE_MAX_STOCK:.0f}$ (limite absolue)", flush=True)
             return None
 
         volume = info.get("volume", 0)
@@ -831,7 +1417,7 @@ def analyze_stock(ticker, verbose=True):
         else:
             if verbose and direction == "SHORT":
                 print(f"  ❌ SHORT: vol_ratio {vol_ratio:.2f} < {SHORT_VOL_MIN}", flush=True)
-            return None
+            return None if direction == "SHORT" else None
 
         float_shares = info.get("floatShares")
         if float_shares is not None and float_shares < 100_000_000:
@@ -868,17 +1454,32 @@ def analyze_stock(ticker, verbose=True):
                 elif direction == "SHORT" and sent >= 2:
                     score -= 1
                     break
+
+        structure_hist = fetch_intraday_structure(ticker)
+        rvol = calculate_intraday_rvol_from_hist(structure_hist) \
+               if INTRADAY_FILTERS.get("rvol_enabled", True) else None
+
+        now_min = datetime.now(MONTREAL_TZ).hour * 60 + datetime.now(MONTREAL_TZ).minute
+        if rvol is not None and now_min >= INTRADAY_FILTERS.get("rvol_apply_reject_after_min", 585):
+            if rvol < INTRADAY_FILTERS.get("rvol_reject_below", 0.5):
+                if verbose:
+                    print(f"  ❌ RVOL intraday x{rvol:.2f} trop faible — rejet", flush=True)
+                return None
+
         if verbose:
-            print(f"  📊 Score: {score}/7 | Gap: {gap:.2f}% | Vol: x{vol_ratio:.2f} | Direction: {direction}", flush=True)
-        if score < SCORE_MIN_STOCKS:
+            rvol_display = f"x{rvol:.2f}" if rvol is not None else "N/A"
+            print(f"  📊 Score: {score}/7 | Gap: {gap:.2f}% | Vol: x{vol_ratio:.2f} | RVOL: {rvol_display} | Direction: {direction}", flush=True)
+
+        timing_pen = get_timing_penalty()
+        effective_score_min = min(7, SCORE_MIN_STOCKS + regime.get("score_min_stock_adj", 0) + timing_pen)
+        if score < effective_score_min:
             return None
 
         inst_score, _ = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
         if verbose:
             print(f"     🏛️ Inst. Interest: {inst_score}/10", flush=True)
 
-        # >>> VWAP/POC via module externe (direction-aware) <<<
-        vwap, poc, vwap_verdict = get_vwap_poc(ticker, price, direction)
+        vwap, poc = get_vwap_poc(ticker, price, direction)
         if vwap is not None:
             vwap = round(vwap, 2)
         if poc is not None:
@@ -889,20 +1490,68 @@ def analyze_stock(ticker, verbose=True):
         confidence = get_confidence_score(score, vol_ratio, gap, cap_category)
         held_pct = info.get("heldPercentInstitutions", 0.5) or 0.5
 
-        if abs(gap) >= 20:
-            tp_brut = 2.0 + (score - 4) * 0.6
-        elif abs(gap) >= 10:
-            tp_brut = 1.5 + (score - 4) * 0.4
-        else:
-            tp_brut = 0.5 + (score - 4) * 0.2
-        sl_brut = 2.0 if score >= 6 else 2.5
-        tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(tp_brut, sl_brut, spread_pct, vol_ratio, cap_category, gap, held_pct)
+        daily_ctx = get_daily_context(ticker, verbose=verbose)
+        atr_pct = daily_ctx.get("atr_pct") if daily_ctx else None
 
+        tp_ref = estimate_tp_pct_from_atr(atr_pct, gap, score, regime.get("tp_mult_adj", 1.0))
+        if tp_ref is None:
+            tp_ref = estimate_tp_pct_fallback(gap, score, regime.get("tp_mult_adj", 1.0))
+            if verbose:
+                print(f"     ⚠️ ATR indisponible — référence de distance via gap/score", flush=True)
+
+        structure = detect_setup_structure(structure_hist, price, direction, gap, vwap, poc)
+        structural_sl = calculate_structural_sl(price, direction, structure)
+        if structural_sl is None:
+            if verbose:
+                print("     ❌ SL structurel indisponible/invalide", flush=True)
+            return None
+
+        tp_ref_adj, _, trail_adj = adjust_risk_with_factors(
+            tp_ref, structural_sl["sl_pct"], spread_pct, vol_ratio, cap_category, gap, held_pct
+        )
         if direction == "SHORT":
-            sl_adj += SHORT_SL_WIDENING
             trail_adj += SHORT_TRAIL_WIDENING
 
-        tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, 2.0)
+        sl_final = validate_sl_bounds_only(structural_sl)
+        if sl_final is None:
+            if verbose:
+                print(
+                    f"     ❌ SL structurel hors bornes : {structural_sl['sl_pct']:.2f}% "
+                    f"({structural_sl.get('sl_atr', 0):.2f} ATR)", flush=True
+                )
+            return None
+
+        min_rr = get_min_rr_for_regime(regime)
+        tp_candidates = _build_tp_candidates(
+            entry=price, direction=direction,
+            vwap=vwap, poc=poc,
+            structure_hist=structure_hist,
+            structure=structure,
+            daily_ctx=daily_ctx,
+        )
+        tp_final, tp_source_label = compute_structural_tp(
+            entry=price,
+            sl_price=structural_sl["sl_price"],
+            direction=direction,
+            atr_tp_pct=tp_ref_adj,
+            candidates=tp_candidates,
+            min_rr=min_rr,
+            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.7),
+            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.5),
+            verbose=verbose,
+        )
+        if tp_final is None:
+            if verbose:
+                print("     ❌ Setup rejeté : aucun TP structurel valide", flush=True)
+            return None
+
+        if tp_final <= 0 or sl_final <= 0 or tp_final / sl_final < min_rr:
+            if verbose:
+                print(
+                    f"     ❌ R/R final {tp_final/sl_final:.2f}:1 < min {min_rr:.1f}:1",
+                    flush=True
+                )
+            return None
 
         if direction == "LONG":
             tp_mult = 1 + tp_final / 100
@@ -913,6 +1562,13 @@ def analyze_stock(ticker, verbose=True):
         trail_base = 2.5 if score >= 8 else 3.0 if score >= 6 else 4.0
         trail = compute_coherent_trailing(trail_base, trail_adj, sl_final)
 
+        if verbose:
+            print(
+                f"     🎯 TP structurel : {tp_final:.2f}% [{tp_source_label}] "
+                f"| SL : {sl_final:.2f}% | R/R : {tp_final/sl_final:.2f}:1",
+                flush=True
+            )
+
         return {
             "ticker": ticker, "exchange": exchange, "price": price, "gap": gap,
             "score": score, "vol_ratio": vol_ratio, "cap_category": cap_category,
@@ -921,19 +1577,24 @@ def analyze_stock(ticker, verbose=True):
             "trail_pct": round(trail, 2), "tp_pct": round(tp_final, 2),
             "sl_pct": round(sl_final, 2), "inst_interest": inst_score,
             "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
-            "vwap_verdict": vwap_verdict,
-            "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated"
+            "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated",
+            "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
+            "rvol_intraday": round(rvol, 2) if rvol is not None else None,
+            "min_rr_regime": min_rr,
+            "tp_source": tp_source_label,
+            "setup_type": (structure or {}).get("setup_type", "N/A"),
+            "structure_level": (structure or {}).get("structure_level"),
+            "invalidation_level": (structure or {}).get("invalidation_level"),
+            "sl_atr": round(structural_sl.get("sl_atr"), 2) if structural_sl else None
         }
     except Exception as e:
         if verbose:
             print(f"  ⚠️ Ticker indisponible: {e}", flush=True)
         return None
 
-# ============================================================
-# ANALYSE ETF
-# ============================================================
-
-def analyze_etf(ticker):
+def analyze_etf(ticker, regime=None):
+    if regime is None:
+        regime = _default_regime()
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
@@ -968,15 +1629,29 @@ def analyze_etf(ticker):
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
         aum = info.get("totalAssets", 0) or info.get("assetsUnderManagement", 0)
 
+        gap_min_long = 0.5 + regime.get("gap_min_long_adj", 0.0)
+        gap_max_short = SHORT_ETF_GAP_MIN - regime.get("gap_min_short_adj", 0.0)
+
         score = 0
-        if 0.5 <= gap <= 8:
+        if gap_min_long <= gap <= 8:
             direction = "LONG"
             score += 1
-        elif -8 <= gap <= SHORT_ETF_GAP_MIN:
+        elif -8 <= gap <= gap_max_short:
             direction = "SHORT"
             score += 1
         else:
             return None
+
+        if direction == "LONG" and not DIRECTION_CONTROL.get("enable_longs", True):
+            print(f"  ❌ ETF {ticker}: LONG désactivé via direction_control", flush=True)
+            return None
+        if direction == "SHORT" and not DIRECTION_CONTROL.get("enable_shorts", True):
+            print(f"  ❌ ETF {ticker}: SHORT désactivé via direction_control", flush=True)
+            return None
+        if direction == "SHORT" and price > SHORT_PRICE_MAX_ETF:
+            print(f"  ❌ ETF {ticker}: SHORT prix {price:.2f}$ > {SHORT_PRICE_MAX_ETF:.0f}$ (limite absolue)", flush=True)
+            return None
+
         if vol_ratio > 0.9:
             score += 1
         if aum > 50_000_000 or aum == 0:
@@ -992,37 +1667,101 @@ def analyze_etf(ticker):
                     score += 1
                 elif direction == "SHORT" and price < 1.3 * sma20:
                     score += 1
-        if score < SCORE_MIN_ETFS:
+
+        structure_hist = fetch_intraday_structure(ticker)
+        rvol = calculate_intraday_rvol_from_hist(structure_hist) \
+               if INTRADAY_FILTERS.get("rvol_enabled", True) else None
+
+        now_min = datetime.now(MONTREAL_TZ).hour * 60 + datetime.now(MONTREAL_TZ).minute
+        if rvol is not None and now_min >= INTRADAY_FILTERS.get("rvol_apply_reject_after_min", 585):
+            if rvol < INTRADAY_FILTERS.get("rvol_reject_below", 0.5):
+                print(f"  ❌ ETF {ticker}: RVOL intraday x{rvol:.2f} trop faible", flush=True)
+                return None
+
+        timing_pen = get_timing_penalty()
+        effective_score_min = min(5, SCORE_MIN_ETFS + regime.get("score_min_etf_adj", 0) + timing_pen)
+        if score < effective_score_min:
             return None
 
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
         inst_score, _ = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
-
-        # >>> VWAP/POC via module externe (direction-aware) <<<
-        vwap, poc, vwap_verdict = get_vwap_poc(ticker, price, direction)
+        vwap, poc = get_vwap_poc(ticker, price, direction)
         if vwap is not None:
             vwap = round(vwap, 2)
         if poc is not None:
             poc = round(poc, 2)
-
         short_ratio = info.get("shortRatio", None)
 
-        if abs(gap) >= 6:
-            tp_brut = 1.5 + (score - 3) * 0.5
-        elif abs(gap) >= 3:
-            tp_brut = 1.0 + (score - 3) * 0.5
-        else:
-            tp_brut = 0.5 + (score - 3) * 0.5
-        sl_brut = 2.0
-        held_pct = info.get("heldPercentInstitutions", 0.5) or 0.5
-        tp_adj, sl_adj, trail_adj = adjust_risk_with_factors(tp_brut, sl_brut, spread_pct, vol_ratio, "Large Cap", gap, held_pct)
+        prior_high, prior_low = _prior_day_hl_from_daily(hist)
+        daily_ctx = {"atr_pct": None, "prior_high": prior_high, "prior_low": prior_low}
 
+        if len(hist) >= 15:
+            daily_ctx["atr_pct"] = calculate_atr_pct_from_ohlc(
+                hist["High"].astype(float), hist["Low"].astype(float), hist["Close"].astype(float), 14
+            )
+        atr_pct = daily_ctx["atr_pct"]
+
+        tp_ref = estimate_tp_pct_from_atr(atr_pct, gap, score, regime.get("tp_mult_adj", 1.0))
+        if tp_ref is None:
+            if abs(gap) >= 6:
+                tp_ref = 1.5 + (score - 3) * 0.5
+            elif abs(gap) >= 3:
+                tp_ref = 1.0 + (score - 3) * 0.5
+            else:
+                tp_ref = 0.5 + (score - 3) * 0.5
+            tp_ref *= regime.get("tp_mult_adj", 1.0)
+
+        structure = detect_setup_structure(structure_hist, price, direction, gap, vwap, poc)
+        structural_sl = calculate_structural_sl(price, direction, structure)
+        if structural_sl is None:
+            print(f"  ❌ ETF {ticker}: SL structurel indisponible/invalide", flush=True)
+            return None
+
+        held_pct = info.get("heldPercentInstitutions", 0.5) or 0.5
+        tp_ref_adj, _, trail_adj = adjust_risk_with_factors(
+            tp_ref, structural_sl["sl_pct"], spread_pct, vol_ratio, "Large Cap", gap, held_pct
+        )
         if direction == "SHORT":
-            sl_adj += SHORT_SL_WIDENING
             trail_adj += SHORT_TRAIL_WIDENING
 
-        tp_final, sl_final = apply_risk_mandate(tp_adj, sl_adj, 2.0)
+        sl_final = validate_sl_bounds_only(structural_sl)
+        if sl_final is None:
+            print(
+                f"  ❌ ETF {ticker}: SL structurel hors bornes "
+                f"{structural_sl['sl_pct']:.2f}% ({structural_sl.get('sl_atr', 0):.2f} ATR)", flush=True
+            )
+            return None
+
+        min_rr = get_min_rr_for_regime(regime)
+        tp_candidates = _build_tp_candidates(
+            entry=price, direction=direction,
+            vwap=vwap, poc=poc,
+            structure_hist=structure_hist,
+            structure=structure,
+            daily_ctx=daily_ctx,
+        )
+        tp_final, tp_source_label = compute_structural_tp(
+            entry=price,
+            sl_price=structural_sl["sl_price"],
+            direction=direction,
+            atr_tp_pct=tp_ref_adj,
+            candidates=tp_candidates,
+            min_rr=min_rr,
+            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.7),
+            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.5),
+            verbose=False,
+        )
+        if tp_final is None:
+            print(f"  ❌ ETF {ticker}: aucun TP structurel valide", flush=True)
+            return None
+
+        if tp_final <= 0 or sl_final <= 0 or tp_final / sl_final < min_rr:
+            print(
+                f"  ❌ ETF {ticker}: R/R final {tp_final/sl_final:.2f}:1 < min {min_rr:.1f}:1",
+                flush=True
+            )
+            return None
 
         if direction == "LONG":
             tp_mult = 1 + tp_final / 100
@@ -1040,17 +1779,20 @@ def analyze_etf(ticker):
             "tp_mult": round(tp_mult, 3), "sl_mult": round(sl_mult, 3),
             "trail_pct": round(trail, 2), "tp_pct": round(tp_final, 2),
             "sl_pct": round(sl_final, 2), "inst_interest": inst_score,
+            "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
+            "rvol_intraday": round(rvol, 2) if rvol is not None else None,
+            "min_rr_regime": min_rr,
+            "tp_source": tp_source_label,
             "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
-            "vwap_verdict": vwap_verdict,
-            "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated"
+            "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated",
+            "setup_type": (structure or {}).get("setup_type", "N/A"),
+            "structure_level": (structure or {}).get("structure_level"),
+            "invalidation_level": (structure or {}).get("invalidation_level"),
+            "sl_atr": round(structural_sl.get("sl_atr"), 2) if structural_sl else None
         }
     except Exception as e:
         print(f"  ⚠️ ETF indisponible ({ticker}): {e}", flush=True)
         return None
-
-# ============================================================
-# ENRICHISSEMENT SYNTHETIC L2
-# ============================================================
 
 def enrich_with_synthetic_l2(results, is_etf=False):
     if not results:
@@ -1076,10 +1818,6 @@ def enrich_with_synthetic_l2(results, is_etf=False):
         data["synthetic_l2_label"] = l2["label"]
     return results
 
-# ============================================================
-# QUANTITÉ ET FORMATAGE
-# ============================================================
-
 def calculate_quantity(entry, stop, capital, risk_pct, max_cap_pct):
     risk_amount = capital * risk_pct
     max_exposure = capital * max_cap_pct
@@ -1093,96 +1831,94 @@ def calculate_quantity(entry, stop, capital, risk_pct, max_cap_pct):
 def format_price(p):
     return f"{p:.2f}"
 
-def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1"):
-    max_score = 7 if not is_etf else 5
+def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1", regime=None):
+    if regime is None:
+        regime = _default_regime()
+
     entry = data["price"]
     direction = data["direction"]
     tp_pct = data.get("tp_pct", 0.0)
     sl_pct = data.get("sl_pct", 0.0)
     trail_pct = data.get("trail_pct", 0.0)
+    tp_source = data.get("tp_source", None)
 
     if direction == "LONG":
         tp = round(entry * (1 + tp_pct / 100), 2)
         sl = round(entry * (1 - sl_pct / 100), 2)
-        trail_price = round(entry * (1 - trail_pct / 100), 2)
         gain_display = f"+{tp_pct:.1f}%"
         loss_display = f"-{sl_pct:.1f}%"
     else:
         tp = round(entry * (1 - tp_pct / 100), 2)
         sl = round(entry * (1 + sl_pct / 100), 2)
-        trail_price = round(entry * (1 + trail_pct / 100), 2)
         gain_display = f"-{tp_pct:.1f}%"
         loss_display = f"+{sl_pct:.1f}%"
 
     qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+    unit_label = "shares" if not is_etf else "units"
+
+    if direction == "LONG":
+        trail_price = round(entry * 1.005, 2)
+    else:
+        trail_price = round(entry * 0.995, 2)
 
     spread_display = ""
-    if data["spread_pct"] > 0:
+    if data.get("spread_pct", 0) > 0:
         spread_usd = round((data["spread_pct"] / 100) * entry, 2)
         spread_display = f" | Spread: {data['spread_pct']:.2f}% (${spread_usd:.2f})"
 
+    gap_display = f"{data.get('gap', 0.0):+.2f}%"
+
     verdict_text, verdict_emoji = get_verdict(data["confidence"])
     direction_emoji = "📈 LONG" if direction == "LONG" else "📉 SHORT"
-    gap_display = f"+{data['gap']:.2f}%" if data["gap"] >= 0 else f"{data['gap']:.2f}%"
 
     inst = data.get("inst_interest", 0)
     inst_label = "High" if inst >= 7 else "Moderate" if inst >= 4 else "Low"
 
-    vwap_display = f"${data['vwap']:.2f}" if data.get("vwap") is not None else "N/A"
-    poc_display = f"${data['poc']:.2f}" if data.get("poc") is not None else "N/A"
-    cap_display = data["cap_category"] if not is_etf and "cap_category" in data else ""
-    short_ratio = data.get("short_ratio")
-    short_display = f"{short_ratio:.1f}" if short_ratio is not None else "N/A"
-
-    l2_score = data.get("synthetic_l2_score", 50)
     conv_label, conv_emoji = calculate_conviction(
-        direction, data["gap"], data["vol_ratio"], data.get("vwap"), entry, inst,
-        bias, data.get("poc"), l2_score
+        direction,
+        data["gap"],
+        data["vol_ratio"],
+        data.get("vwap"),
+        entry,
+        inst,
+        bias,
+        data.get("poc"),
+        data.get("synthetic_l2_score", 50),
     )
 
-    msg = f"🔹 <b>{data['ticker']}</b> ({data['exchange']}){spread_display}\n"
-    msg += f"   Direction: <b>{direction_emoji}</b>\n"
-    msg += f"   Quality: <b>{data['score']}/{max_score}</b> | Confidence: <b>{data['confidence']}/10</b>\n"
-    msg += f"   GAP: {gap_display} | Volume: x{data['vol_ratio']:.2f} | Short ratio: {short_display}\n"
-    msg += f"   VWAP: {vwap_display} | POC: {poc_display}"
+    regime_name = regime.get("regime", "Unknown")
+    volatility = regime.get("volatility", "Normal")
+    adx = regime.get("adx")
+    adx_display = f"{adx:.1f}" if isinstance(adx, (int, float)) else "N/A"
 
-    vwap_verdict = data.get("vwap_verdict", "")
-    if vwap_verdict:
-        msg += f"\n   {vwap_verdict}"
+    heading = "🚀 BEST ETF SETUP" if is_etf else "🚀 BEST STOCK SETUP"
 
-    if is_etf:
-        msg += f"\n   AUM: {data.get('aum_m', 0):.1f}M$"
-    if cap_display:
-        msg += f"\n   Cap: {cap_display}"
-    msg += "\n"
-    msg += f"   Market Bias: {bias}\n"
-    msg += f"   🏛️ Institutional Interest: {inst}/10 ({inst_label})\n"
-    msg += f"   ⚖️ VERDICT: {verdict_emoji} {verdict_text} | CONVICTION: {conv_emoji} {conv_label} | RANK: {rank}\n"
-    msg += f"   🎯 ENTRY: ${format_price(entry)}\n"
-    msg += f"   📦 QUANTITY: {qty} {'shares' if not is_etf else 'units'}\n"
-    msg += f"   📈 TAKE-PROFIT: ${format_price(tp)} ({gain_display})\n"
-    msg += f"   🛑 STOP LOSS: ${format_price(sl)} ({loss_display})\n"
-    msg += f"   🔄 TRAILING STOP: ${format_price(trail_price)} → {trail_pct:.1f}%\n"
-    if tp_pct > 0 and sl_pct > 0:
-        rr = tp_pct / sl_pct
-        msg += f"   📊 R/R: {tp_pct:.1f} / {sl_pct:.1f} = {rr:.1f}:1\n"
+    rr_tp = tp_pct / sl_pct if sl_pct > 0 else 0.0
+    min_rr = data.get("min_rr_regime", get_min_rr_for_regime(regime))
+
+    if tp_source:
+        abbr = _TP_SOURCE_ABBR.get(tp_source, tp_source)
+        tp_tag = f" [{abbr}]"
     else:
-        msg += "   📊 R/R: N/A\n"
+        tp_tag = ""
+
+    msg = f"{heading}\n"
+    msg += f"🔹 {data['ticker']} ({data['exchange']}){spread_display} | GAP: {gap_display}\n"
+    msg += f"  Direction: {direction_emoji}\n"
+    msg += f"  🧭 Regime: {regime_name} | Vol: {volatility} | ADX: {adx_display}\n"
+    msg += f"  Market Bias: {bias}\n"
+    msg += f"  🏛️ Institutional Interest: {inst}/10 ({inst_label})\n"
+    msg += f"  ⚖️ VERDICT: {verdict_emoji} {verdict_text} | CONVICTION: {conv_emoji} {conv_label} | RANK: {rank}\n"
+    msg += f"  🎯 ENTRY: ${format_price(entry)}\n"
+    msg += f"  📦 QUANTITY: {qty} {unit_label}\n"
+    msg += f"  🏁 TP: ${format_price(tp)} ({gain_display}){tp_tag}\n"
+    msg += f"  🛑 STOP LOSS: ${format_price(sl)} ({loss_display})\n"
+    msg += f"  🔄 TRAILING STOP: ${format_price(trail_price)} → {trail_pct:.1f}%\n"
+    msg += f"  📊 R/R (TP2) → {rr_tp:.1f}:1 | Min. régime: {min_rr:.1f}:1\n"
+
     return msg
 
-# ============================================================
-# ATTENTE — AVEC HEARTBEAT ANTI-TIMEOUT
-# ============================================================
-
 def wait_until_target(target_hour, target_minute):
-    """
-    Attend jusqu'à l'heure cible en imprimant un heartbeat régulier.
-    >>> CORRECTIF 2026-09-28 <<<
-    GitHub Actions tue silencieusement le runner si le process
-    reste silencieux trop longtemps pendant un long sleep().
-    On dort donc par tranches de 30 secondes, et on imprime un
-    heartbeat toutes les 5 minutes pour rester "visible".
-    """
     target = datetime.now(MONTREAL_TZ).replace(
         hour=target_hour, minute=target_minute, second=0, microsecond=0
     )
@@ -1198,19 +1934,14 @@ def wait_until_target(target_hour, target_minute):
         now = datetime.now(MONTREAL_TZ)
         if now >= target:
             break
-        time.sleep(30)  # Réveil toutes les 30 secondes
+        time.sleep(30)
         now = datetime.now(MONTREAL_TZ)
         if now >= target:
             break
-        # Heartbeat toutes les 5 minutes
         if (now - last_heartbeat).total_seconds() >= 300:
             remaining = (target - now).total_seconds()
             print(f"💤 ... encore {remaining/60:.1f} min avant {target.strftime('%H:%M')}", flush=True)
             last_heartbeat = now
-
-# ============================================================
-# MAIN — BOUCLE CONTINUE (2 CRONS EXTERNES)
-# ============================================================
 
 def main():
     now = datetime.now(MONTREAL_TZ)
@@ -1239,11 +1970,11 @@ def main():
 
     if 9 <= heure <= 11 and (heure < 11 or minute <= 35):
         session = "morning"
-        start_hour, start_min = 9, 25
-        end_hour, end_min = 11, 30
+        start_hour, start_min = 9, 30
+        end_hour, end_min = 11, 20
         scan_hours = [9, 10, 11]
-        scan_minutes = [30, 30, 30]
-        print("☀️ Session MATIN détectée – Scans à 09:30, 10:30, 11:30.", flush=True)
+        scan_minutes = [45, 30, 15]
+        print("☀️ Session MATIN détectée – Scans à 09:45, 10:30, 11:15.", flush=True)
     elif 14 <= heure <= 15 and (heure < 15 or minute <= 5):
         session = "afternoon"
         start_hour, start_min = 14, 0
@@ -1302,23 +2033,29 @@ def main():
         if is_scan_time:
             print(f"\n📊 Scan à {now.strftime('%H:%M')} (session {session})", flush=True)
 
+            print("\n🧭 ================================", flush=True)
+            print("🧭 DÉTECTION DE RÉGIME DE MARCHÉ", flush=True)
+            print("🧭 ================================", flush=True)
+            regime = detect_market_regime(verbose=True)
+            market_bias = regime["bias"]
+
             stocks_results = []
             for ticker in STOCK_TICKERS:
                 print(f"  - {ticker}:", flush=True)
-                data = analyze_stock(ticker, verbose=True)
+                data = analyze_stock(ticker, regime=regime, verbose=True)
                 if data:
                     stocks_results.append(data)
-                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}%", flush=True)
+                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')}", flush=True)
                 else:
                     print("    ❌", flush=True)
 
             etfs_results = []
             for ticker in ETF_TICKERS:
                 print(f"  - {ticker}...", end=" ", flush=True)
-                data = analyze_etf(ticker)
+                data = analyze_etf(ticker, regime=regime)
                 if data:
                     etfs_results.append(data)
-                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% | SL: {data['sl_pct']}%", flush=True)
+                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')}", flush=True)
                 else:
                     print("❌", flush=True)
 
@@ -1341,81 +2078,69 @@ def main():
                     return None
                 scored = []
                 for cand in candidates:
-                    ps = calculate_priority_score(cand, "⚪ Neutral", is_etf)
+                    ps = calculate_priority_score(cand, market_bias, is_etf)
                     scored.append((ps, cand))
                 scored.sort(key=lambda x: x[0], reverse=True)
                 return scored[0][1]
 
-            best_stock_long = get_best(stock_long, False)
-            best_stock_short = get_best(stock_short, False)
-            best_etf_long = get_best(etf_long, True)
-            best_etf_short = get_best(etf_short, True)
-
-            possible_pairs = []
-            threshold = SYNTHETIC_L2_CONFIG["priority_threshold_for_pair"]
-
-            if best_stock_long and best_etf_short:
-                score_stock = calculate_priority_score(best_stock_long, "⚪ Neutral", False)
-                score_etf = calculate_priority_score(best_etf_short, "⚪ Neutral", True)
-                if score_stock >= threshold and score_etf >= threshold:
-                    possible_pairs.append((best_stock_long, best_etf_short, score_stock + score_etf))
-
-            if best_stock_short and best_etf_long:
-                score_stock = calculate_priority_score(best_stock_short, "⚪ Neutral", False)
-                score_etf = calculate_priority_score(best_etf_long, "⚪ Neutral", True)
-                if score_stock >= threshold and score_etf >= threshold:
-                    possible_pairs.append((best_stock_short, best_etf_long, score_stock + score_etf))
-
             selected_stock = None
             selected_etf = None
 
-            if possible_pairs:
-                best_pair = max(possible_pairs, key=lambda x: x[2])
-                selected_stock, selected_etf = best_pair[0], best_pair[1]
+            pair_candidates = []
+            threshold = SYNTHETIC_L2_CONFIG["priority_threshold_for_pair"]
+            for s in stocks_results:
+                for e in etfs_results:
+                    if s["direction"] != e["direction"]:
+                        ps = calculate_priority_score(s, market_bias, False)
+                        pe = calculate_priority_score(e, market_bias, True)
+                        if ps >= threshold and pe >= threshold:
+                            pair_candidates.append((ps + pe, ps, pe, s, e))
+            if pair_candidates:
+                pair_candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+                _, _, _, selected_stock, selected_etf = pair_candidates[0]
             else:
                 all_candidates = []
-                for s in stocks_results:
-                    all_candidates.append((s, False))
-                for e in etfs_results:
-                    all_candidates.append((e, True))
-
-                best_setup = None
-                best_score = -float('inf')
-                for cand, is_etf in all_candidates:
-                    ps = calculate_priority_score(cand, "⚪ Neutral", is_etf)
-                    if ps > best_score:
-                        best_score = ps
-                        best_setup = (cand, is_etf)
-
-                if best_setup:
-                    if best_setup[1]:
-                        selected_etf = best_setup[0]
+                for cand in stocks_results:
+                    all_candidates.append((calculate_priority_score(cand, market_bias, False), cand, False))
+                for cand in etfs_results:
+                    all_candidates.append((calculate_priority_score(cand, market_bias, True), cand, True))
+                all_candidates.sort(key=lambda x: x[0], reverse=True)
+                if all_candidates:
+                    _, best, is_etf = all_candidates[0]
+                    if is_etf:
+                        selected_etf = best
                     else:
-                        selected_stock = best_setup[0]
+                        selected_stock = best
 
-            msg = "🤖 <b>NorthSentinel CA Only</b>™\n"
-            msg += "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
-            msg += f"📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
-            msg += f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
-            msg += "═══════════════════════════════════\n"
-
-            msg += "\n🚀 <b>BEST STOCK SETUP</b>\n"
+            selected_items = []
             if selected_stock:
-                rank = "1/2" if selected_etf else "1/1"
-                msg += build_setup_message(selected_stock, is_etf=False, bias="⚪ Neutral", rank=rank)
-            else:
-                msg += "   <i>Aucun setup STOCK valide trouvé.</i>\n"
-
-            msg += "\n🚀 <b>BEST ETF SETUP</b>\n"
+                selected_items.append((selected_stock, False))
             if selected_etf:
-                rank = "2/2" if selected_stock else "1/1"
-                msg += build_setup_message(selected_etf, is_etf=True, bias="⚪ Neutral", rank=rank)
-            else:
-                msg += "   <i>Aucun setup ETF valide trouvé.</i>\n"
+                selected_items.append((selected_etf, True))
 
-            msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
-            send_telegram(msg)
+            if selected_items:
+                now_scan = datetime.now(MONTREAL_TZ)
+                header = (
+                    "🤖 NorthSentinel CA Only™\n"
+                    "Canadian intraday trading signals. Long & Short. Manual execution.\n"
+                    f"📅 {now_scan.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
+                    f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
+                    "═══════════════════════\n\n"
+                )
+                msg = header
+                total_selected = len(selected_items)
+                for idx, (selected, is_etf) in enumerate(selected_items, start=1):
+                    rank = f"{idx}/{total_selected}"
+                    msg += build_setup_message(
+                        selected, is_etf=is_etf, bias=market_bias, rank=rank, regime=regime
+                    )
+                    if idx < total_selected:
+                        msg += "\n"
+                msg += "━━━━━━━━━━━━━━━━━\n\n"
+                msg += "Informational automated signal. Not financial or trading advice."
+                send_telegram(msg)
+            else:
+                print("  ℹ️ Aucun setup validé — aucun message Telegram envoyé.", flush=True)
 
         next_scan_time = None
         for h, m in zip(scan_hours, scan_minutes):
@@ -1424,9 +2149,9 @@ def main():
                 break
 
         if next_scan_time is None:
-            print("⏳ Plus aucun scan programmé – Attente de la fin de session.", flush=True)
-            time.sleep(60)
-            continue
+            print("⏹️ Dernier scan effectué – Fin de session immédiate.", flush=True)
+            send_session_end_message(now, session)
+            break
 
         target_hour, target_min = next_scan_time
 
