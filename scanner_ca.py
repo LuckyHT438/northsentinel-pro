@@ -2151,7 +2151,7 @@ def main():
                 msg += f"  🧭 Regime: {regime_name} | Vol: {volatility} | ADX: {adx_display}\n"
                 msg += f"  Market Bias: {market_bias}\n"
                 msg += f"  Tickers evaluated: {len(STOCK_TICKERS)} stocks, {len(ETF_TICKERS)} ETFs\n"
-                msg += "  All candidates rejected by filters (gap, RVOL, structure SL, structural TP, minimum R/R).\n"
+                msg += "  All candidates rejected by filters (gap, RVOL, structure SL, structural TP, or minimum R/R).\n"
 
             msg += "\n━━━━━━━━━━━━━━━━━\n\n"
             msg += "Informational automated signal. Not financial or trading advice."
