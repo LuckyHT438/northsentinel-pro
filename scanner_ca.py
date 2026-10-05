@@ -19,6 +19,13 @@
 #   - Si aucun niveau valide → REJET du setup (plus de fallback arbitraire)
 #   - Le message affiche la source du TP entre crochets : [VWAP], [ORB-H], etc.
 #
+# >>> MESSAGE TELEGRAM TOUJOURS ENVOYÉ (2026-10-05) <<<
+# Le message Telegram est envoyé à CHAQUE scan, même si aucun setup
+# n'est validé. Cela permet de :
+#   - confirmer que le scanner tourne et a bien atteint l'heure du scan
+#   - documenter le régime de marché courant et le nombre de tickers scannés
+#   - garder une trace historique des scans "vides" pour analyse
+#
 # >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
 # >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
 # >>> AMÉLIORATIONS #2 / #7 <<<
@@ -2118,16 +2125,20 @@ def main():
             if selected_etf:
                 selected_items.append((selected_etf, True))
 
+            # === MESSAGE TELEGRAM TOUJOURS ENVOYÉ ===
+            # Même si aucun setup n'est validé, on envoie un message
+            # documentant le scan (régime, nombre de tickers, setups).
+            now_scan = datetime.now(MONTREAL_TZ)
+            header = (
+                "🤖 NorthSentinel CA Only™\n"
+                "Canadian intraday trading signals. Long & Short. Manual execution.\n"
+                f"📅 {now_scan.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
+                f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
+                "═══════════════════════\n\n"
+            )
+            msg = header
+
             if selected_items:
-                now_scan = datetime.now(MONTREAL_TZ)
-                header = (
-                    "🤖 NorthSentinel CA Only™\n"
-                    "Canadian intraday trading signals. Long & Short. Manual execution.\n"
-                    f"📅 {now_scan.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
-                    f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
-                    "═══════════════════════\n\n"
-                )
-                msg = header
                 total_selected = len(selected_items)
                 for idx, (selected, is_etf) in enumerate(selected_items, start=1):
                     rank = f"{idx}/{total_selected}"
@@ -2136,11 +2147,20 @@ def main():
                     )
                     if idx < total_selected:
                         msg += "\n"
-                msg += "━━━━━━━━━━━━━━━━━\n\n"
-                msg += "Informational automated signal. Not financial or trading advice."
-                send_telegram(msg)
             else:
-                print("  ℹ️ Aucun setup validé — aucun message Telegram envoyé.", flush=True)
+                regime_name = regime.get("regime", "Unknown")
+                volatility = regime.get("volatility", "Normal")
+                adx = regime.get("adx")
+                adx_display = f"{adx:.1f}" if isinstance(adx, (int, float)) else "N/A"
+                msg += "ℹ️ <b>Aucun setup validé pour ce scan.</b>\n"
+                msg += f"  🧭 Regime: {regime_name} | Vol: {volatility} | ADX: {adx_display}\n"
+                msg += f"  Market Bias: {market_bias}\n"
+                msg += f"  Tickers évalués: {len(STOCK_TICKERS)} stocks, {len(ETF_TICKERS)} ETFs\n"
+                msg += "  Tous les candidats ont été rejetés par les filtres (gap, RVOL, structure SL, TP structurel, R/R minimum).\n"
+
+            msg += "\n━━━━━━━━━━━━━━━━━\n\n"
+            msg += "Informational automated signal. Not financial or trading advice."
+            send_telegram(msg)
 
         next_scan_time = None
         for h, m in zip(scan_hours, scan_minutes):
