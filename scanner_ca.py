@@ -21,10 +21,8 @@
 #
 # >>> MESSAGE TELEGRAM TOUJOURS ENVOYÉ (2026-10-05) <<<
 # Le message Telegram est envoyé à CHAQUE scan, même si aucun setup
-# n'est validé. Cela permet de :
-#   - confirmer que le scanner tourne et a bien atteint l'heure du scan
-#   - documenter le régime de marché courant et le nombre de tickers scannés
-#   - garder une trace historique des scans "vides" pour analyse
+# n'est validé. Le message "No valid setup" est en anglais comme
+# tout le reste du message Telegram.
 #
 # >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
 # >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
@@ -2125,9 +2123,6 @@ def main():
             if selected_etf:
                 selected_items.append((selected_etf, True))
 
-            # === MESSAGE TELEGRAM TOUJOURS ENVOYÉ ===
-            # Même si aucun setup n'est validé, on envoie un message
-            # documentant le scan (régime, nombre de tickers, setups).
             now_scan = datetime.now(MONTREAL_TZ)
             header = (
                 "🤖 NorthSentinel CA Only™\n"
@@ -2152,11 +2147,11 @@ def main():
                 volatility = regime.get("volatility", "Normal")
                 adx = regime.get("adx")
                 adx_display = f"{adx:.1f}" if isinstance(adx, (int, float)) else "N/A"
-                msg += "ℹ️ <b>Aucun setup validé pour ce scan.</b>\n"
+                msg += "ℹ️ <b>No valid setup for this scan.</b>\n"
                 msg += f"  🧭 Regime: {regime_name} | Vol: {volatility} | ADX: {adx_display}\n"
                 msg += f"  Market Bias: {market_bias}\n"
-                msg += f"  Tickers évalués: {len(STOCK_TICKERS)} stocks, {len(ETF_TICKERS)} ETFs\n"
-                msg += "  Tous les candidats ont été rejetés par les filtres (gap, RVOL, structure SL, TP structurel, R/R minimum).\n"
+                msg += f"  Tickers evaluated: {len(STOCK_TICKERS)} stocks, {len(ETF_TICKERS)} ETFs\n"
+                msg += "  All candidates rejected by filters (gap, RVOL, structure SL, structural TP, minimum R/R).\n"
 
             msg += "\n━━━━━━━━━━━━━━━━━\n\n"
             msg += "Informational automated signal. Not financial or trading advice."
