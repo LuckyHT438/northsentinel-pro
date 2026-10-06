@@ -2154,7 +2154,7 @@ def main():
                 msg += "  All candidates rejected by filters (gap, RVOL, structure SL, structural TP, or minimum R/R).\n"
 
             msg += "\n━━━━━━━━━━━━━━━━━\n\n"
-            msg += "Informational automated signal. Not financial or trading advice."
+            msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
             send_telegram(msg)
 
         next_scan_time = None
