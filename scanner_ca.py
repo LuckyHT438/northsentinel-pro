@@ -2125,8 +2125,8 @@ def main():
 
             now_scan = datetime.now(MONTREAL_TZ)
             header = (
-                "🤖 NorthSentinel CA Only™\n"
-                "Canadian intraday trading signals. Long & Short. Manual execution.\n"
+                "🤖 <b>NorthSentinel CA Only</b>™\n"
+                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
                 f"📅 {now_scan.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
                 f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
                 "═══════════════════════\n\n"
