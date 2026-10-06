@@ -11,18 +11,15 @@
 # Aucun affichage dans le message Telegram.
 #
 # >>> TP UNIQUE STRUCTUREL (2026-10-02) <<<
-# Le TP est désormais TOUJOURS ancré sur un niveau de marché réel.
-#   - L'ATR quotidien fournit une distance de référence
-#   - Le script cherche un niveau structurel dans la fenêtre
-#     [0.7 × ATR_ref, 1.5 × ATR_ref]
-#   - Contrainte de R/R minimum (du régime) appliquée
-#   - Si aucun niveau valide → REJET du setup (plus de fallback arbitraire)
-#   - Le message affiche la source du TP entre crochets : [VWAP], [ORB-H], etc.
-#
 # >>> MESSAGE TELEGRAM TOUJOURS ENVOYÉ (2026-10-05) <<<
-# Le message Telegram est envoyé à CHAQUE scan, même si aucun setup
-# n'est validé. Le message "No valid setup" est en anglais comme
-# tout le reste du message Telegram.
+# >>> CORRECTIF TRAILING STOP (2026-10-06) <<<
+# Le calcul du trailing stop était inversé : il était affiché AU-DESSUS
+# de l'entrée pour un LONG (au lieu d'en dessous) et EN DESSOUS pour un
+# SHORT (au lieu d'au-dessus). Correction :
+#   - LONG  : trail_price = entry × (1 - trail_pct/100)
+#   - SHORT : trail_price = entry × (1 + trail_pct/100)
+# La ligne du message précise désormais que le trailing n'est actif
+# qu'APRÈS que le TP soit atteint.
 #
 # >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
 # >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
@@ -1861,10 +1858,12 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1", regi
     qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
     unit_label = "shares" if not is_etf else "units"
 
+    # === CORRECTIF : trailing sous l'entrée pour LONG, au-dessus pour SHORT ===
+    # Le trailing n'est actif qu'APRÈS que le TP soit atteint.
     if direction == "LONG":
-        trail_price = round(entry * 1.005, 2)
+        trail_price = round(entry * (1 - trail_pct / 100), 2)
     else:
-        trail_price = round(entry * 0.995, 2)
+        trail_price = round(entry * (1 + trail_pct / 100), 2)
 
     spread_display = ""
     if data.get("spread_pct", 0) > 0:
@@ -2125,8 +2124,8 @@ def main():
 
             now_scan = datetime.now(MONTREAL_TZ)
             header = (
-                "🤖 <b>NorthSentinel CA Only</b>™\n"
-                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
+                "🤖 NorthSentinel CA Only™\n"
+                "Canadian intraday trading signals. Long & Short. Manual execution.\n"
                 f"📅 {now_scan.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
                 f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
                 "═══════════════════════\n\n"
