@@ -184,19 +184,19 @@ CONFIG = {
             "ATZ.TO", "GRGD.TO", "SPCX.TO", "ATD.TO",
             "MRU.TO", "L.TO", "EMP-A.TO", "CP.TO", "CNR.TO",
             "TFII.TO", "MDA.TO", "BBD-B.TO", "CGO.TO", "QBR-B.TO",
-            "IFC.TO", "SLF.TO", "RBA.TO",
+            "IFC.TO", "SLF.TO", "RBA.TO", "CGY.TO",
             "NA.TO",
             "WELL.TO",
             "GIB-A.TO", "OTEX.TO", "DSG.TO", "CS.TO",
-            "KTN.V",
-            "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO", "FSV.TO",
+            "CAR-UN.TO",
+            "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO",
             "BEP-UN.TO", "BAM.TO", "BN.TO", "NTR.TO",
             "TD.TO", "CM.TO", "AQN.TO",
-            "ENB.TO", "ARX.TO", "VET.TO", "BB.TO", "TCW.TO",
-            "BTO.TO", "IVN.TO", "HBM.TO", "AGI.TO", "NCM.TO",
+            "ENB.TO", "ARX.TO", "VET.TO", "REI-UN.TO", "TCW.TO",
+            "TSAT.TO", "IVN.TO", "HBM.TO", "MTY.TO", "QSR.TO",
             "SHOP.TO", "KEEL.TO",
-            "WN.TO", "HPS-A.TO",
-            "ARTG.V", "TOI.V", "ZDC.V", "QNC.V",
+            "WN.TO", "HPS-A.TO", "EXE.TO",
+            "TOI.V", "ZDC.V", "QNC.V",
             "BTE.TO", "FR.TO", "SIL.TO", "EQB.TO", "TRI.TO", "GIL.TO"
         ],
         "etfs": [
@@ -2124,8 +2124,8 @@ def main():
 
             now_scan = datetime.now(MONTREAL_TZ)
             header = (
-                "🤖 NorthSentinel CA Only™\n"
-                "Canadian intraday trading signals. Long & Short. Manual execution.\n"
+                "🤖 <b>NorthSentinel CA Only</b>™\n"
+                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
                 f"📅 {now_scan.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
                 f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
                 "═══════════════════════\n\n"
