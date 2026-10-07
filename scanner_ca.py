@@ -13,14 +13,14 @@
 # >>> TP UNIQUE STRUCTUREL (2026-10-02) <<<
 # >>> MESSAGE TELEGRAM TOUJOURS ENVOYÉ (2026-10-05) <<<
 # >>> CORRECTIF TRAILING STOP (2026-10-06) <<<
-# Le calcul du trailing stop était inversé : il était affiché AU-DESSUS
-# de l'entrée pour un LONG (au lieu d'en dessous) et EN DESSOUS pour un
-# SHORT (au lieu d'au-dessus). Correction :
+# >>> TP DOIT COUVRIR LES FRAIS IBKR (2026-10-07) <<<
+# >>> CORRECTIF FRAIS IBKR — MODÈLE FIXE (2026-10-07) <<<
+# >>> TRAILING STOP AVEC PRIX + % (2026-10-07) <<<
+# Le trailing stop est affiché avec son niveau initial (Stop Price IBKR)
+# ET le pourcentage à saisir dans Trailing Amount.
 #   - LONG  : trail_price = entry × (1 - trail_pct/100)
 #   - SHORT : trail_price = entry × (1 + trail_pct/100)
-# La ligne du message précise désormais que le trailing n'est actif
-# qu'APRÈS que le TP soit atteint.
-#
+# À placer immédiatement après que l'ordre d'entrée soit filled.
 # >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
 # >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
 # >>> AMÉLIORATIONS #2 / #7 <<<
@@ -65,16 +65,17 @@ CONFIG = {
     "position_management": {
         "qty1_pct": 100.0,
         "qty2_pct": 0.0,
-        "ibkr_pricing_model": "tiered",
+        "ibkr_pricing_model": "fixed",
         "ibkr_tiered_commission_per_share": 0.008,
         "ibkr_fixed_commission_per_share": 0.010,
         "ibkr_min_commission_per_order": 1.00,
-        "ibkr_clearing_per_share": 0.00017,
-        "ibkr_clearing_cap_per_order": 2.00,
-        "ibkr_regulatory_per_share": 0.00011,
-        "ibkr_regulatory_cap_per_order": 3.30,
+        "ibkr_clearing_per_share": 0.0,
+        "ibkr_clearing_cap_per_order": 0.0,
+        "ibkr_regulatory_per_share": 0.0,
+        "ibkr_regulatory_cap_per_order": 0.0,
         "fee_safety_buffer_per_order": 1.00,
-        "fee_safe_trailing": True
+        "fee_safe_trailing": True,
+        "fee_margin_factor": 1.05
     },
 
     "technical_structure": {
@@ -244,6 +245,7 @@ IBKR_CLEARING_CAP = float(POSITION_CONFIG["ibkr_clearing_cap_per_order"])
 IBKR_REGULATORY_PER_SHARE = float(POSITION_CONFIG["ibkr_regulatory_per_share"])
 IBKR_REGULATORY_CAP = float(POSITION_CONFIG["ibkr_regulatory_cap_per_order"])
 IBKR_FEE_BUFFER = float(POSITION_CONFIG["fee_safety_buffer_per_order"])
+IBKR_FEE_MARGIN = float(POSITION_CONFIG.get("fee_margin_factor", 1.05))
 FEE_SAFE_TRAILING = bool(POSITION_CONFIG["fee_safe_trailing"])
 TECH_STRUCTURE_CONFIG = CONFIG["technical_structure"]
 
@@ -351,7 +353,7 @@ def _build_ca_holidays(year):
     fam = date(year, 2, 1)
     while fam.weekday() != 0:
         fam += timedelta(days=1)
-    ca.add(fam + timedelta(days=7))
+    ca.add(fam + timedelta(days=14))
     a = year % 19
     b = year // 100
     c = year % 100
@@ -1266,8 +1268,41 @@ def _build_tp_candidates(entry, direction, vwap, poc, structure_hist,
 
     return candidates
 
+def estimate_ibkr_order_fees(qty, price):
+    if qty <= 0 or price <= 0:
+        return 0.0
+
+    if IBKR_PRICING_MODEL == "fixed":
+        commission = max(IBKR_MIN_COMMISSION, qty * IBKR_FIXED_COMMISSION)
+        third_party = 0.0
+    else:
+        commission = max(IBKR_MIN_COMMISSION, qty * IBKR_TIERED_COMMISSION)
+        clearing = min(qty * IBKR_CLEARING_PER_SHARE, IBKR_CLEARING_CAP)
+        regulatory = min(qty * IBKR_REGULATORY_PER_SHARE, IBKR_REGULATORY_CAP)
+        third_party = clearing + regulatory
+
+    return round(commission + third_party + IBKR_FEE_BUFFER, 4)
+
+def compute_min_tp_pct_for_fees(entry, qty, direction):
+    if entry <= 0 or qty <= 0:
+        return None
+
+    entry_fees = estimate_ibkr_order_fees(qty, entry)
+    if entry_fees <= 0:
+        return None
+
+    total_fees = entry_fees * 2.0
+    total_fees_with_margin = total_fees * IBKR_FEE_MARGIN
+
+    position_value = qty * entry
+    if position_value <= 0:
+        return None
+
+    min_pct = total_fees_with_margin / position_value * 100.0
+    return round(min_pct, 4)
+
 def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
-                          min_rr, lower_mult=0.7, upper_mult=1.5, verbose=False):
+                          min_rr, qty=None, lower_mult=0.7, upper_mult=1.5, verbose=False):
     if atr_tp_pct is None or atr_tp_pct <= 0 or entry <= 0 or sl_price <= 0:
         return None, None
     if not candidates:
@@ -1279,8 +1314,16 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
 
     ref_lo = atr_tp_pct * lower_mult
     ref_hi = atr_tp_pct * upper_mult
-    min_dist_pct = sl_pct * min_rr
+    min_dist_pct_rr = sl_pct * min_rr
     max_dist_pct = 8.0
+
+    fee_min_dist_pct = 0.0
+    if qty is not None and qty > 0:
+        fee_min = compute_min_tp_pct_for_fees(entry, qty, direction)
+        if fee_min is not None:
+            fee_min_dist_pct = fee_min
+
+    effective_min_dist_pct = max(min_dist_pct_rr, fee_min_dist_pct)
 
     valid = []
     for price, label in candidates:
@@ -1295,7 +1338,7 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
                 continue
             dist_pct = (entry - price) / entry * 100
 
-        if dist_pct < min_dist_pct:
+        if dist_pct < effective_min_dist_pct:
             continue
         if dist_pct > max_dist_pct:
             continue
@@ -1306,8 +1349,21 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
 
     if not valid:
         if verbose:
-            print(f"     ❌ Aucun TP structurel dans [{ref_lo:.2f}%, {ref_hi:.2f}%] "
-                  f"avec R/R ≥ {min_rr:.1f}:1 (SL {sl_pct:.2f}%)", flush=True)
+            if fee_min_dist_pct > min_dist_pct_rr:
+                constraint_msg = (
+                    f"frais IBKR ({fee_min_dist_pct:.3f}%) > R/R min "
+                    f"({min_dist_pct_rr:.2f}%) | SL {sl_pct:.2f}%"
+                )
+            else:
+                constraint_msg = (
+                    f"R/R ≥ {min_rr:.1f}:1 (SL {sl_pct:.2f}%) "
+                    f"| frais IBKR ≥ {fee_min_dist_pct:.3f}%"
+                )
+            print(
+                f"     ❌ Aucun TP structurel dans [{ref_lo:.2f}%, {ref_hi:.2f}%] "
+                f"avec {constraint_msg}",
+                flush=True
+            )
         return None, None
 
     valid.sort(key=lambda x: abs(x[2] - atr_tp_pct))
@@ -1523,6 +1579,14 @@ def analyze_stock(ticker, regime=None, verbose=True):
                 )
             return None
 
+        if direction == "LONG":
+            sl_price_for_qty = round(price * (1 - sl_final / 100), 2)
+        else:
+            sl_price_for_qty = round(price * (1 + sl_final / 100), 2)
+        qty_for_fees = calculate_quantity(
+            price, sl_price_for_qty, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION
+        )
+
         min_rr = get_min_rr_for_regime(regime)
         tp_candidates = _build_tp_candidates(
             entry=price, direction=direction,
@@ -1538,6 +1602,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
             atr_tp_pct=tp_ref_adj,
             candidates=tp_candidates,
             min_rr=min_rr,
+            qty=qty_for_fees,
             lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.7),
             upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.5),
             verbose=verbose,
@@ -1555,6 +1620,15 @@ def analyze_stock(ticker, regime=None, verbose=True):
                 )
             return None
 
+        fee_min_pct = compute_min_tp_pct_for_fees(price, qty_for_fees, direction)
+        if fee_min_pct is not None and tp_final < fee_min_pct:
+            if verbose:
+                print(
+                    f"     ❌ TP ({tp_final:.2f}%) < couverture frais IBKR ({fee_min_pct:.3f}%)",
+                    flush=True
+                )
+            return None
+
         if direction == "LONG":
             tp_mult = 1 + tp_final / 100
             sl_mult = 1 - sl_final / 100
@@ -1565,9 +1639,11 @@ def analyze_stock(ticker, regime=None, verbose=True):
         trail = compute_coherent_trailing(trail_base, trail_adj, sl_final)
 
         if verbose:
+            fee_display = f"{fee_min_pct:.3f}%" if fee_min_pct is not None else "N/A"
             print(
                 f"     🎯 TP structurel : {tp_final:.2f}% [{tp_source_label}] "
-                f"| SL : {sl_final:.2f}% | R/R : {tp_final/sl_final:.2f}:1",
+                f"| SL : {sl_final:.2f}% | R/R : {tp_final/sl_final:.2f}:1 "
+                f"| frais min : {fee_display}",
                 flush=True
             )
 
@@ -1583,6 +1659,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
             "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
             "rvol_intraday": round(rvol, 2) if rvol is not None else None,
             "min_rr_regime": min_rr,
+            "fee_min_pct": fee_min_pct,
             "tp_source": tp_source_label,
             "setup_type": (structure or {}).get("setup_type", "N/A"),
             "structure_level": (structure or {}).get("structure_level"),
@@ -1735,6 +1812,14 @@ def analyze_etf(ticker, regime=None):
             )
             return None
 
+        if direction == "LONG":
+            sl_price_for_qty = round(price * (1 - sl_final / 100), 2)
+        else:
+            sl_price_for_qty = round(price * (1 + sl_final / 100), 2)
+        qty_for_fees = calculate_quantity(
+            price, sl_price_for_qty, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION
+        )
+
         min_rr = get_min_rr_for_regime(regime)
         tp_candidates = _build_tp_candidates(
             entry=price, direction=direction,
@@ -1750,17 +1835,26 @@ def analyze_etf(ticker, regime=None):
             atr_tp_pct=tp_ref_adj,
             candidates=tp_candidates,
             min_rr=min_rr,
+            qty=qty_for_fees,
             lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.7),
             upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.5),
             verbose=False,
         )
         if tp_final is None:
-            print(f"  ❌ ETF {ticker}: aucun TP structurel valide", flush=True)
+            print(f"  ❌ ETF {ticker}: aucun TP structurel valide (R/R ou frais IBKR)", flush=True)
             return None
 
         if tp_final <= 0 or sl_final <= 0 or tp_final / sl_final < min_rr:
             print(
                 f"  ❌ ETF {ticker}: R/R final {tp_final/sl_final:.2f}:1 < min {min_rr:.1f}:1",
+                flush=True
+            )
+            return None
+
+        fee_min_pct = compute_min_tp_pct_for_fees(price, qty_for_fees, direction)
+        if fee_min_pct is not None and tp_final < fee_min_pct:
+            print(
+                f"  ❌ ETF {ticker}: TP ({tp_final:.2f}%) < couverture frais IBKR ({fee_min_pct:.3f}%)",
                 flush=True
             )
             return None
@@ -1784,6 +1878,7 @@ def analyze_etf(ticker, regime=None):
             "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
             "rvol_intraday": round(rvol, 2) if rvol is not None else None,
             "min_rr_regime": min_rr,
+            "fee_min_pct": fee_min_pct,
             "tp_source": tp_source_label,
             "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
             "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated",
@@ -1858,8 +1953,8 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1", regi
     qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
     unit_label = "shares" if not is_etf else "units"
 
-    # === CORRECTIF : trailing sous l'entrée pour LONG, au-dessus pour SHORT ===
-    # Le trailing n'est actif qu'APRÈS que le TP soit atteint.
+    # Trailing stop : prix initial sous l'entrée pour LONG, au-dessus pour SHORT.
+    # À placer dans IBKR immédiatement après que l'ordre soit filled.
     if direction == "LONG":
         trail_price = round(entry * (1 - trail_pct / 100), 2)
     else:
@@ -1918,7 +2013,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1", regi
     msg += f"  🏁 TP: ${format_price(tp)} ({gain_display}){tp_tag}\n"
     msg += f"  🛑 STOP LOSS: ${format_price(sl)} ({loss_display})\n"
     msg += f"  🔄 TRAILING STOP: ${format_price(trail_price)} → {trail_pct:.1f}%\n"
-    msg += f"  📊 R/R (TP2) → {rr_tp:.1f}:1 | Min. régime: {min_rr:.1f}:1\n"
+    msg += f"  📊 R/R → {rr_tp:.1f}:1 | Min. régime: {min_rr:.1f}:1\n"
 
     return msg
 
@@ -2150,7 +2245,7 @@ def main():
                 msg += f"  🧭 Regime: {regime_name} | Vol: {volatility} | ADX: {adx_display}\n"
                 msg += f"  Market Bias: {market_bias}\n"
                 msg += f"  Tickers evaluated: {len(STOCK_TICKERS)} stocks, {len(ETF_TICKERS)} ETFs\n"
-                msg += "  All candidates rejected by filters (gap, RVOL, structure SL, structural TP, or minimum R/R).\n"
+                msg += "  All candidates rejected by filters (gap, RVOL, structure SL, structural TP, minimum R/R, or IBKR fee coverage).\n"
 
             msg += "\n━━━━━━━━━━━━━━━━━\n\n"
             msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
