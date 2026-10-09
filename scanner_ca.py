@@ -23,6 +23,13 @@
 #     - Cap temporel du TP selon l'heure du scan
 #     - Plafond R/R sur setup faible (Low + inst<=3)
 #     - Garde-fou final : TP > 1.5×ATR sur setup faible → rejet
+# >>> CORRECTIF TP CALIBRATION v2 (2026-10-09) <<<
+#     - Cap temporel désormais RELATIF à l'ATR du titre (atr_mult),
+#       le plus restrictif entre cap absolu et cap ATR s'applique.
+#     - Relâchement calibré : conviction Low 0.85, inst<=3 0.90,
+#       weak_setup_max_rr 3.5, fenêtre ATR structurelle [0.55×; 1.70×].
+#     - Message dédié quand les contraintes R/R et la fenêtre ATR
+#       sont disjointes (setup structurellement infaisable).
 # >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
 # >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
 # >>> AMÉLIORATIONS #2 / #7 <<<
@@ -157,7 +164,7 @@ CONFIG = {
         "min_rr_default": 2.0
     },
 
-    # === AJOUT 2026-10-09 ===
+    # === AJOUT 2026-10-09 / v2 ===
     # Calibration contextuelle du TP : pénalise les setups faibles,
     # contre-tendance, ou tardifs dans la séance.
     "tp_calibration": {
@@ -172,30 +179,35 @@ CONFIG = {
         },
 
         # Pénalité selon le label de conviction produit par calculate_conviction.
+        # v2 : Low 0.80 → 0.85, Moderate inchangé.
         "conviction_mult": {
-            "Low": 0.80,
+            "Low": 0.85,
             "Moderate": 0.92,
             "High": 1.00,
         },
 
         # Pénalité selon le score d'intérêt institutionnel (0-10).
+        # v2 : le3 0.85 → 0.90, eq4 inchangé.
         "inst_interest_mult": {
-            "le3": 0.85,
+            "le3": 0.90,
             "eq4": 0.95,
             "ge5": 1.00,
         },
 
-        # Cap dur du TP (en %) selon l'heure ET du scan (minutes depuis minuit).
-        # null = pas de cap.
+        # Cap du TP selon l'heure ET du scan (minutes depuis minuit).
+        # v2 : cap_pct = plafond dur absolu (relevé), atr_mult = plafond
+        #      relatif à l'ATR quotidien du titre. Le plus petit s'applique.
+        # null partout = pas de cap.
         "time_caps": [
-            {"end_min": 600, "cap_pct": None},   # avant 10:00
-            {"end_min": 690, "cap_pct": 5.0},    # 10:00 – 11:29
-            {"end_min": 840, "cap_pct": 3.5},    # 11:30 – 13:59
-            {"end_min": 1440, "cap_pct": 2.5},   # 14:00 et après
+            {"end_min": 600,  "cap_pct": None, "atr_mult": None},  # avant 10:00
+            {"end_min": 690,  "cap_pct": 5.5,  "atr_mult": 4.5},   # 10:00 – 11:29
+            {"end_min": 840,  "cap_pct": 4.5,  "atr_mult": 3.5},   # 11:30 – 13:59
+            {"end_min": 1440, "cap_pct": 3.5,  "atr_mult": 3.0},   # 14:00 et après
         ],
 
         # Plafond dur de R/R sur setup faible (conv Low ET inst<=3).
-        "weak_setup_max_rr": 2.5,
+        # v2 : 2.5 → 3.5 (relâchement modéré pour débloquer les SL serrés).
+        "weak_setup_max_rr": 3.5,
 
         # Garde-fou final : si TP dépasse ce multiple d'ATR quotidien
         # sur un setup faible (conv Low ET inst<=3), le setup est rejeté.
@@ -218,8 +230,9 @@ CONFIG = {
         "rvol_apply_reject_after_min": 585,
 
         "structural_tp_enabled": True,
-        "structural_tp_atr_lower_mult": 0.7,
-        "structural_tp_atr_upper_mult": 1.5,
+        # v2 : fenêtre élargie 0.70→0.55 en bas, 1.50→1.70 en haut.
+        "structural_tp_atr_lower_mult": 0.55,
+        "structural_tp_atr_upper_mult": 1.70,
     },
 
     "tickers": {
@@ -717,15 +730,28 @@ def get_inst_interest_tp_mult(inst_interest):
         return float(TP_CALIBRATION["inst_interest_mult"]["eq4"])
     return float(TP_CALIBRATION["inst_interest_mult"]["ge5"])
 
-def get_intraday_tp_cap_pct():
-    """Cap dur du TP selon l'heure ET courante. None = pas de cap."""
+def get_intraday_tp_cap_pct(atr_pct=None):
+    """Cap dur du TP selon l'heure ET courante.
+    v2 : cap_pct (absolu) et atr_mult (relatif à l'ATR du titre). Le plus
+    restrictif des deux s'applique. Si atr_pct est None ou <= 0, seul
+    cap_pct est utilisé (comportement v1).
+    None = pas de cap."""
     if not TP_CALIBRATION.get("enable", True):
         return None
     now = datetime.now(MONTREAL_TZ)
     total = now.hour * 60 + now.minute
     for entry in TP_CALIBRATION.get("time_caps", []):
         if total < entry.get("end_min", 1440):
-            return entry.get("cap_pct", None)
+            caps = []
+            cap_abs = entry.get("cap_pct", None)
+            atr_mult = entry.get("atr_mult", None)
+            if cap_abs is not None:
+                caps.append(float(cap_abs))
+            if atr_mult is not None and atr_pct is not None and atr_pct > 0:
+                caps.append(float(atr_mult) * float(atr_pct))
+            if not caps:
+                return None
+            return min(caps)
     return None
 
 def get_weak_setup_max_rr(conviction_label, inst_interest):
@@ -733,12 +759,13 @@ def get_weak_setup_max_rr(conviction_label, inst_interest):
     if not TP_CALIBRATION.get("enable", True):
         return None
     if conviction_label == "Low" and inst_interest <= 3:
-        return float(TP_CALIBRATION.get("weak_setup_max_rr", 2.5))
+        return float(TP_CALIBRATION.get("weak_setup_max_rr", 3.5))
     return None
 
 def apply_tp_calibration(tp_ref_pct, direction, regime_name, conviction_label,
-                          inst_interest, verbose=False):
+                          inst_interest, atr_pct=None, verbose=False):
     """Applique séquentiellement les multiplicateurs + cap temporel.
+    v2 : atr_pct optionnel pour le cap relatif à l'ATR du titre.
     Retourne (tp_ref_calibré, dict_trace)."""
     if not TP_CALIBRATION.get("enable", True) or tp_ref_pct is None:
         return tp_ref_pct, {}
@@ -752,7 +779,7 @@ def apply_tp_calibration(tp_ref_pct, direction, regime_name, conviction_label,
     tp_ref_pct = tp_ref_pct * mult_conv
     tp_ref_pct = tp_ref_pct * mult_inst
 
-    cap = get_intraday_tp_cap_pct()
+    cap = get_intraday_tp_cap_pct(atr_pct=atr_pct)
     cap_applied = False
     if cap is not None and tp_ref_pct > cap:
         tp_ref_pct = cap
@@ -765,19 +792,21 @@ def apply_tp_calibration(tp_ref_pct, direction, regime_name, conviction_label,
         "mult_conviction": mult_conv,
         "mult_inst": mult_inst,
         "time_cap": cap,
+        "atr_pct": round(float(atr_pct), 3) if atr_pct is not None else None,
         "cap_applied": cap_applied,
         "regime_name": regime_name,
         "conviction": conviction_label,
         "inst_interest": inst_interest,
     }
     if verbose:
-        cap_str = f"{cap:.1f}%" if cap is not None else "aucun"
+        cap_str = f"{cap:.2f}%" if cap is not None else "aucun"
+        atr_str = f"{atr_pct:.2f}%" if atr_pct is not None else "N/A"
         print(
             f"     🎛️ TP calib: {before:.2f}% "
             f"×{mult_regime:.2f}(régime {regime_name}) "
             f"×{mult_conv:.2f}(conv {conviction_label}) "
             f"×{mult_inst:.2f}(inst {inst_interest}) "
-            f"→ cap {cap_str}"
+            f"→ cap {cap_str} (ATR titre {atr_str})"
             f"{' [APPLIQUÉ]' if cap_applied else ''} "
             f"= {tp_ref_pct:.2f}%",
             flush=True
@@ -1473,6 +1502,14 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
     if max_rr is not None:
         max_dist_pct_rr_cap = sl_pct * max_rr
 
+    # === AJOUT 2026-10-09 (v2) : bornes effectives + détection disjonction ===
+    lower_bound = max(effective_min_dist_pct, ref_lo)
+    upper_bound = ref_hi
+    if max_dist_pct_rr_cap is not None:
+        upper_bound = min(upper_bound, max_dist_pct_rr_cap)
+    upper_bound = min(upper_bound, max_dist_pct)
+    constraints_disjoint = lower_bound > upper_bound
+
     valid = []
     for price, label in candidates:
         if price is None or price <= 0:
@@ -1499,24 +1536,37 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
 
     if not valid:
         if verbose:
-            if fee_min_dist_pct > min_dist_pct_rr:
-                constraint_msg = (
-                    f"frais IBKR ({fee_min_dist_pct:.3f}%) > R/R min "
-                    f"({min_dist_pct_rr:.2f}%) | SL {sl_pct:.2f}%"
+            if constraints_disjoint:
+                # === AJOUT 2026-10-09 (v2) : message dédié ===
+                print(
+                    f"     ❌ Contraintes R/R et fenêtre ATR disjointes — "
+                    f"setup structurellement infaisable "
+                    f"(plancher effectif {lower_bound:.2f}% > "
+                    f"plafond effectif {upper_bound:.2f}% ; "
+                    f"SL {sl_pct:.2f}%, min R/R {min_rr:.1f}:1"
+                    + (f", plafond R/R {max_rr:.1f}:1" if max_rr is not None else "")
+                    + ")",
+                    flush=True
                 )
             else:
-                constraint_msg = (
-                    f"R/R ≥ {min_rr:.1f}:1 (SL {sl_pct:.2f}%) "
-                    f"| frais IBKR ≥ {fee_min_dist_pct:.3f}%"
+                if fee_min_dist_pct > min_dist_pct_rr:
+                    constraint_msg = (
+                        f"frais IBKR ({fee_min_dist_pct:.3f}%) > R/R min "
+                        f"({min_dist_pct_rr:.2f}%) | SL {sl_pct:.2f}%"
+                    )
+                else:
+                    constraint_msg = (
+                        f"R/R ≥ {min_rr:.1f}:1 (SL {sl_pct:.2f}%) "
+                        f"| frais IBKR ≥ {fee_min_dist_pct:.3f}%"
+                    )
+                extra = ""
+                if max_dist_pct_rr_cap is not None:
+                    extra = f" | plafond R/R {max_rr:.1f}:1 ({max_dist_pct_rr_cap:.2f}%)"
+                print(
+                    f"     ❌ Aucun TP structurel dans [{ref_lo:.2f}%, {ref_hi:.2f}%] "
+                    f"avec {constraint_msg}{extra}",
+                    flush=True
                 )
-            extra = ""
-            if max_dist_pct_rr_cap is not None:
-                extra = f" | plafond R/R {max_rr:.1f}:1 ({max_dist_pct_rr_cap:.2f}%)"
-            print(
-                f"     ❌ Aucun TP structurel dans [{ref_lo:.2f}%, {ref_hi:.2f}%] "
-                f"avec {constraint_msg}{extra}",
-                flush=True
-            )
         return None, None
 
     valid.sort(key=lambda x: abs(x[2] - atr_tp_pct))
@@ -1744,6 +1794,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
             regime_name=regime.get("regime", "Unknown"),
             conviction_label=conv_label_prelim,
             inst_interest=inst_score,
+            atr_pct=atr_pct,   # === v2 : ATR du titre pour cap relatif ===
             verbose=verbose,
         )
         weak_max_rr = get_weak_setup_max_rr(conv_label_prelim, inst_score)
@@ -1774,8 +1825,8 @@ def analyze_stock(ticker, regime=None, verbose=True):
             candidates=tp_candidates,
             min_rr=min_rr,
             qty=qty_for_fees,
-            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.7),
-            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.5),
+            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.55),
+            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.70),
             max_rr=weak_max_rr,   # === AJOUT 2026-10-09 ===
             verbose=verbose,
         )
@@ -2012,6 +2063,7 @@ def analyze_etf(ticker, regime=None):
             regime_name=regime.get("regime", "Unknown"),
             conviction_label=conv_label_prelim,
             inst_interest=inst_score,
+            atr_pct=atr_pct,   # === v2 : ATR du titre pour cap relatif ===
             verbose=False,
         )
         weak_max_rr = get_weak_setup_max_rr(conv_label_prelim, inst_score)
@@ -2040,8 +2092,8 @@ def analyze_etf(ticker, regime=None):
             candidates=tp_candidates,
             min_rr=min_rr,
             qty=qty_for_fees,
-            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.7),
-            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.5),
+            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.55),
+            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.70),
             max_rr=weak_max_rr,   # === AJOUT 2026-10-09 ===
             verbose=False,
         )
