@@ -16,11 +16,13 @@
 # >>> TP DOIT COUVRIR LES FRAIS IBKR (2026-10-07) <<<
 # >>> CORRECTIF FRAIS IBKR — MODÈLE FIXE (2026-10-07) <<<
 # >>> TRAILING STOP AVEC PRIX + % (2026-10-07) <<<
-# Le trailing stop est affiché avec son niveau initial (Stop Price IBKR)
-# ET le pourcentage à saisir dans Trailing Amount.
-#   - LONG  : trail_price = entry × (1 - trail_pct/100)
-#   - SHORT : trail_price = entry × (1 + trail_pct/100)
-# À placer immédiatement après que l'ordre d'entrée soit filled.
+# >>> CORRECTIF TP CALIBRATION CONTEXTUELLE (2026-10-09) <<<
+#     - Multiplicateur TP contre-tendance (Trending-Down+LONG / Trending-Up+SHORT)
+#     - Pénalité conviction (Low / Moderate)
+#     - Pénalité intérêt institutionnel (<=3 / ==4)
+#     - Cap temporel du TP selon l'heure du scan
+#     - Plafond R/R sur setup faible (Low + inst<=3)
+#     - Garde-fou final : TP > 1.5×ATR sur setup faible → rejet
 # >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
 # >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
 # >>> AMÉLIORATIONS #2 / #7 <<<
@@ -155,6 +157,51 @@ CONFIG = {
         "min_rr_default": 2.0
     },
 
+    # === AJOUT 2026-10-09 ===
+    # Calibration contextuelle du TP : pénalise les setups faibles,
+    # contre-tendance, ou tardifs dans la séance.
+    "tp_calibration": {
+        "enable": True,
+
+        # Multiplicateur TP appliqué selon régime ET sens du trade.
+        # Trending-Down + LONG → LONG contre-tendance en marché baissier.
+        # Trending-Up   + SHORT → SHORT contre-tendance en marché haussier.
+        "counter_trend_regime_mult": {
+            "Trending-Down_LONG": 0.80,
+            "Trending-Up_SHORT": 0.80,
+        },
+
+        # Pénalité selon le label de conviction produit par calculate_conviction.
+        "conviction_mult": {
+            "Low": 0.80,
+            "Moderate": 0.92,
+            "High": 1.00,
+        },
+
+        # Pénalité selon le score d'intérêt institutionnel (0-10).
+        "inst_interest_mult": {
+            "le3": 0.85,
+            "eq4": 0.95,
+            "ge5": 1.00,
+        },
+
+        # Cap dur du TP (en %) selon l'heure ET du scan (minutes depuis minuit).
+        # null = pas de cap.
+        "time_caps": [
+            {"end_min": 600, "cap_pct": None},   # avant 10:00
+            {"end_min": 690, "cap_pct": 5.0},    # 10:00 – 11:29
+            {"end_min": 840, "cap_pct": 3.5},    # 11:30 – 13:59
+            {"end_min": 1440, "cap_pct": 2.5},   # 14:00 et après
+        ],
+
+        # Plafond dur de R/R sur setup faible (conv Low ET inst<=3).
+        "weak_setup_max_rr": 2.5,
+
+        # Garde-fou final : si TP dépasse ce multiple d'ATR quotidien
+        # sur un setup faible (conv Low ET inst<=3), le setup est rejeté.
+        "atr_hard_cap_mult": 1.5,
+    },
+
     "intraday_filters": {
         "timing_penalty_windows": [
             {"start_min": 570, "end_min": 585, "penalty": 1},   # 09:30–09:45
@@ -259,6 +306,7 @@ SYNTHETIC_L2_CONFIG = CONFIG["synthetic_l2"]
 REGIME_CONFIG = CONFIG["regime"]
 INTRADAY_FILTERS = CONFIG["intraday_filters"]
 DIRECTION_CONTROL = CONFIG["direction_control"]
+TP_CALIBRATION = CONFIG["tp_calibration"]  # === AJOUT 2026-10-09 ===
 
 SHORT_ADJ = CONFIG["short_adjustment"]
 SHORT_SL_WIDENING = SHORT_ADJ["sl_widening_pct"]
@@ -642,6 +690,99 @@ def get_timing_penalty():
         if w["start_min"] <= total < w["end_min"]:
             penalty += w["penalty"]
     return penalty
+
+# === AJOUT 2026-10-09 : helpers de calibration TP ===
+
+def get_counter_trend_tp_mult(direction, regime_name):
+    """Multiplicateur TP contre-tendance : LONG en Trending-Down, SHORT en Trending-Up."""
+    if not TP_CALIBRATION.get("enable", True):
+        return 1.0
+    if regime_name == "Trending-Down" and direction == "LONG":
+        return float(TP_CALIBRATION["counter_trend_regime_mult"].get("Trending-Down_LONG", 0.80))
+    if regime_name == "Trending-Up" and direction == "SHORT":
+        return float(TP_CALIBRATION["counter_trend_regime_mult"].get("Trending-Up_SHORT", 0.80))
+    return 1.0
+
+def get_conviction_tp_mult(conviction_label):
+    if not TP_CALIBRATION.get("enable", True):
+        return 1.0
+    return float(TP_CALIBRATION["conviction_mult"].get(conviction_label, 1.00))
+
+def get_inst_interest_tp_mult(inst_interest):
+    if not TP_CALIBRATION.get("enable", True):
+        return 1.0
+    if inst_interest <= 3:
+        return float(TP_CALIBRATION["inst_interest_mult"]["le3"])
+    if inst_interest == 4:
+        return float(TP_CALIBRATION["inst_interest_mult"]["eq4"])
+    return float(TP_CALIBRATION["inst_interest_mult"]["ge5"])
+
+def get_intraday_tp_cap_pct():
+    """Cap dur du TP selon l'heure ET courante. None = pas de cap."""
+    if not TP_CALIBRATION.get("enable", True):
+        return None
+    now = datetime.now(MONTREAL_TZ)
+    total = now.hour * 60 + now.minute
+    for entry in TP_CALIBRATION.get("time_caps", []):
+        if total < entry.get("end_min", 1440):
+            return entry.get("cap_pct", None)
+    return None
+
+def get_weak_setup_max_rr(conviction_label, inst_interest):
+    """Plafond R/R sur setup faible. None = pas de plafond."""
+    if not TP_CALIBRATION.get("enable", True):
+        return None
+    if conviction_label == "Low" and inst_interest <= 3:
+        return float(TP_CALIBRATION.get("weak_setup_max_rr", 2.5))
+    return None
+
+def apply_tp_calibration(tp_ref_pct, direction, regime_name, conviction_label,
+                          inst_interest, verbose=False):
+    """Applique séquentiellement les multiplicateurs + cap temporel.
+    Retourne (tp_ref_calibré, dict_trace)."""
+    if not TP_CALIBRATION.get("enable", True) or tp_ref_pct is None:
+        return tp_ref_pct, {}
+
+    before = float(tp_ref_pct)
+    mult_regime = get_counter_trend_tp_mult(direction, regime_name)
+    mult_conv = get_conviction_tp_mult(conviction_label)
+    mult_inst = get_inst_interest_tp_mult(inst_interest)
+
+    tp_ref_pct = tp_ref_pct * mult_regime
+    tp_ref_pct = tp_ref_pct * mult_conv
+    tp_ref_pct = tp_ref_pct * mult_inst
+
+    cap = get_intraday_tp_cap_pct()
+    cap_applied = False
+    if cap is not None and tp_ref_pct > cap:
+        tp_ref_pct = cap
+        cap_applied = True
+
+    trace = {
+        "before": round(before, 3),
+        "after": round(tp_ref_pct, 3),
+        "mult_regime": mult_regime,
+        "mult_conviction": mult_conv,
+        "mult_inst": mult_inst,
+        "time_cap": cap,
+        "cap_applied": cap_applied,
+        "regime_name": regime_name,
+        "conviction": conviction_label,
+        "inst_interest": inst_interest,
+    }
+    if verbose:
+        cap_str = f"{cap:.1f}%" if cap is not None else "aucun"
+        print(
+            f"     🎛️ TP calib: {before:.2f}% "
+            f"×{mult_regime:.2f}(régime {regime_name}) "
+            f"×{mult_conv:.2f}(conv {conviction_label}) "
+            f"×{mult_inst:.2f}(inst {inst_interest}) "
+            f"→ cap {cap_str}"
+            f"{' [APPLIQUÉ]' if cap_applied else ''} "
+            f"= {tp_ref_pct:.2f}%",
+            flush=True
+        )
+    return tp_ref_pct, trace
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
@@ -1302,7 +1443,9 @@ def compute_min_tp_pct_for_fees(entry, qty, direction):
     return round(min_pct, 4)
 
 def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
-                          min_rr, qty=None, lower_mult=0.7, upper_mult=1.5, verbose=False):
+                          min_rr, qty=None, lower_mult=0.7, upper_mult=1.5,
+                          max_rr=None, verbose=False):
+    # === AJOUT 2026-10-09 : max_rr param pour plafonner le R/R sur setup faible ===
     if atr_tp_pct is None or atr_tp_pct <= 0 or entry <= 0 or sl_price <= 0:
         return None, None
     if not candidates:
@@ -1325,6 +1468,11 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
 
     effective_min_dist_pct = max(min_dist_pct_rr, fee_min_dist_pct)
 
+    # === AJOUT 2026-10-09 : plafond R/R si setup faible ===
+    max_dist_pct_rr_cap = None
+    if max_rr is not None:
+        max_dist_pct_rr_cap = sl_pct * max_rr
+
     valid = []
     for price, label in candidates:
         if price is None or price <= 0:
@@ -1341,6 +1489,8 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
         if dist_pct < effective_min_dist_pct:
             continue
         if dist_pct > max_dist_pct:
+            continue
+        if max_dist_pct_rr_cap is not None and dist_pct > max_dist_pct_rr_cap:
             continue
         if not (ref_lo <= dist_pct <= ref_hi):
             continue
@@ -1359,9 +1509,12 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
                     f"R/R ≥ {min_rr:.1f}:1 (SL {sl_pct:.2f}%) "
                     f"| frais IBKR ≥ {fee_min_dist_pct:.3f}%"
                 )
+            extra = ""
+            if max_dist_pct_rr_cap is not None:
+                extra = f" | plafond R/R {max_rr:.1f}:1 ({max_dist_pct_rr_cap:.2f}%)"
             print(
                 f"     ❌ Aucun TP structurel dans [{ref_lo:.2f}%, {ref_hi:.2f}%] "
-                f"avec {constraint_msg}",
+                f"avec {constraint_msg}{extra}",
                 flush=True
             )
         return None, None
@@ -1579,6 +1732,24 @@ def analyze_stock(ticker, regime=None, verbose=True):
                 )
             return None
 
+        # === AJOUT 2026-10-09 : calibration contextuelle du TP ===
+        # Calcul de la conviction préliminaire (synthetic_l2 pas encore évalué).
+        conv_label_prelim, _ = calculate_conviction(
+            direction, gap, vol_ratio, vwap, price, inst_score,
+            regime.get("bias", "⚪ Neutral"), poc, 50.0
+        )
+        tp_ref_adj, tp_calib_trace = apply_tp_calibration(
+            tp_ref_adj,
+            direction=direction,
+            regime_name=regime.get("regime", "Unknown"),
+            conviction_label=conv_label_prelim,
+            inst_interest=inst_score,
+            verbose=verbose,
+        )
+        weak_max_rr = get_weak_setup_max_rr(conv_label_prelim, inst_score)
+        if verbose and weak_max_rr is not None:
+            print(f"     🔒 R/R plafonné à {weak_max_rr:.1f}:1 (setup faible)", flush=True)
+
         if direction == "LONG":
             sl_price_for_qty = round(price * (1 - sl_final / 100), 2)
         else:
@@ -1605,6 +1776,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
             qty=qty_for_fees,
             lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.7),
             upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.5),
+            max_rr=weak_max_rr,   # === AJOUT 2026-10-09 ===
             verbose=verbose,
         )
         if tp_final is None:
@@ -1619,6 +1791,19 @@ def analyze_stock(ticker, regime=None, verbose=True):
                     flush=True
                 )
             return None
+
+        # === AJOUT 2026-10-09 : garde-fou final cohérence ===
+        # Si setup faible (conv Low ET inst<=3) et TP > 1.5×ATR → rejet.
+        if conv_label_prelim == "Low" and inst_score <= 3:
+            atr_hard_cap = (atr_pct * TP_CALIBRATION.get("atr_hard_cap_mult", 1.5)) if atr_pct else 6.0
+            if tp_final > atr_hard_cap:
+                if verbose:
+                    print(
+                        f"     🚨 GARDE-FOU COHÉRENCE: TP {tp_final:.2f}% > cap ATR "
+                        f"{atr_hard_cap:.2f}% (conv Low, inst {inst_score}) → rejet",
+                        flush=True
+                    )
+                return None
 
         fee_min_pct = compute_min_tp_pct_for_fees(price, qty_for_fees, direction)
         if fee_min_pct is not None and tp_final < fee_min_pct:
@@ -1664,7 +1849,11 @@ def analyze_stock(ticker, regime=None, verbose=True):
             "setup_type": (structure or {}).get("setup_type", "N/A"),
             "structure_level": (structure or {}).get("structure_level"),
             "invalidation_level": (structure or {}).get("invalidation_level"),
-            "sl_atr": round(structural_sl.get("sl_atr"), 2) if structural_sl else None
+            "sl_atr": round(structural_sl.get("sl_atr"), 2) if structural_sl else None,
+            # === AJOUT 2026-10-09 : traçabilité calibration TP ===
+            "tp_calibration": tp_calib_trace,
+            "conviction_prelim": conv_label_prelim,
+            "weak_setup_max_rr": weak_max_rr,
         }
     except Exception as e:
         if verbose:
@@ -1812,6 +2001,21 @@ def analyze_etf(ticker, regime=None):
             )
             return None
 
+        # === AJOUT 2026-10-09 : calibration contextuelle du TP (ETF) ===
+        conv_label_prelim, _ = calculate_conviction(
+            direction, gap, vol_ratio, vwap, price, inst_score,
+            regime.get("bias", "⚪ Neutral"), poc, 50.0
+        )
+        tp_ref_adj, tp_calib_trace = apply_tp_calibration(
+            tp_ref_adj,
+            direction=direction,
+            regime_name=regime.get("regime", "Unknown"),
+            conviction_label=conv_label_prelim,
+            inst_interest=inst_score,
+            verbose=False,
+        )
+        weak_max_rr = get_weak_setup_max_rr(conv_label_prelim, inst_score)
+
         if direction == "LONG":
             sl_price_for_qty = round(price * (1 - sl_final / 100), 2)
         else:
@@ -1838,6 +2042,7 @@ def analyze_etf(ticker, regime=None):
             qty=qty_for_fees,
             lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.7),
             upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.5),
+            max_rr=weak_max_rr,   # === AJOUT 2026-10-09 ===
             verbose=False,
         )
         if tp_final is None:
@@ -1850,6 +2055,16 @@ def analyze_etf(ticker, regime=None):
                 flush=True
             )
             return None
+
+        # === AJOUT 2026-10-09 : garde-fou final cohérence (ETF) ===
+        if conv_label_prelim == "Low" and inst_score <= 3:
+            atr_hard_cap = (atr_pct * TP_CALIBRATION.get("atr_hard_cap_mult", 1.5)) if atr_pct else 6.0
+            if tp_final > atr_hard_cap:
+                print(
+                    f"  ❌ ETF {ticker}: garde-fou cohérence TP {tp_final:.2f}% > cap ATR "
+                    f"{atr_hard_cap:.2f}% (conv Low, inst {inst_score})", flush=True
+                )
+                return None
 
         fee_min_pct = compute_min_tp_pct_for_fees(price, qty_for_fees, direction)
         if fee_min_pct is not None and tp_final < fee_min_pct:
@@ -1885,7 +2100,11 @@ def analyze_etf(ticker, regime=None):
             "setup_type": (structure or {}).get("setup_type", "N/A"),
             "structure_level": (structure or {}).get("structure_level"),
             "invalidation_level": (structure or {}).get("invalidation_level"),
-            "sl_atr": round(structural_sl.get("sl_atr"), 2) if structural_sl else None
+            "sl_atr": round(structural_sl.get("sl_atr"), 2) if structural_sl else None,
+            # === AJOUT 2026-10-09 : traçabilité calibration TP ===
+            "tp_calibration": tp_calib_trace,
+            "conviction_prelim": conv_label_prelim,
+            "weak_setup_max_rr": weak_max_rr,
         }
     except Exception as e:
         print(f"  ⚠️ ETF indisponible ({ticker}): {e}", flush=True)
@@ -1953,8 +2172,6 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1", regi
     qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
     unit_label = "shares" if not is_etf else "units"
 
-    # Trailing stop : prix initial sous l'entrée pour LONG, au-dessus pour SHORT.
-    # À placer dans IBKR immédiatement après que l'ordre soit filled.
     if direction == "LONG":
         trail_price = round(entry * (1 - trail_pct / 100), 2)
     else:
