@@ -30,6 +30,10 @@
 #       weak_setup_max_rr 3.5, fenêtre ATR structurelle [0.55×; 1.70×].
 #     - Message dédié quand les contraintes R/R et la fenêtre ATR
 #       sont disjointes (setup structurellement infaisable).
+# >>> SILENCE MESSAGE JOUR FERMÉ (2026-10-12) <<<
+#     Aucun message Telegram n'est envoyé si le marché est fermé
+#     (week-end, jour férié, fermeture exceptionnelle), que le script
+#     soit lancé manuellement ou via un job programmé.
 # >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
 # >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
 # >>> AMÉLIORATIONS #2 / #7 <<<
@@ -2317,18 +2321,10 @@ def main():
     minute = now.minute
 
     if is_ca_market_closed(now):
+        # === SILENCE MESSAGE JOUR FERMÉ (2026-10-12) ===
+        # Aucun message Telegram n'est envoyé, que le script soit lancé
+        # manuellement ou via un job programmé. Seul un log console est émis.
         print("🏖️ Marché CA fermé – Arrêt.", flush=True)
-        if IS_MANUAL_RUN:
-            msg = (
-                "🤖 <b>NorthSentinel CA Only</b>™\n"
-                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
-                f"<i>📅 {now.strftime('%Y-%m-%d %H:%M')} (Montreal) | 💰 Capital: ${CAPITAL:,.0f}</i>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "⏰ Manual run triggered on a closed market day.\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Informational automated signal. Not financial or trading advice.</i>"
-            )
-            send_telegram(msg)
         return
 
     early_close = is_early_close(now)
