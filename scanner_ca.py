@@ -34,6 +34,19 @@
 #     Aucun message Telegram n'est envoyé si le marché est fermé
 #     (week-end, jour férié, fermeture exceptionnelle), que le script
 #     soit lancé manuellement ou via un job programmé.
+# >>> CORRECTIF v3 — FILTRES D'ENTRÉE DESSERRÉS (2026-10-16) <<<
+#     Objectif : augmenter le taux de validation (11 setups / 50 scans
+#     observés du 5 au 16 octobre). Analyse : ~90% des rejets viennent
+#     du filtre GAP, pas de la calibration TP.
+#     6 changements :
+#       1. price_min_stocks  : 2.00  → 5.00 $  (frais IBKR fixed)
+#       2. price_min_etfs    : N/A   → 10.00 $ (nouveau, protège ETF lev.)
+#       3. gap_min_short     : -2.5  → -1.5 %  (short stocks)
+#       4. min_sl_pct        : 0.50  → 0.35 %  (structure serrée)
+#       5. min_sl_atr        : 0.70  → 0.55    (idem)
+#       6. gap_min_long stk  : 2.0   → 1.0 %   (codé en dur dans analyze_stock)
+#     >>> REVERT EN RÉEL IBKR : remettre ces 6 valeurs à leurs niveaux
+#         d'origine. Chacune porte un commentaire "# v3 :".
 # >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
 # >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
 # >>> AMÉLIORATIONS #2 / #7 <<<
@@ -70,7 +83,8 @@ CONFIG = {
     "max_spread_pct": 5.0,
     "score_min_stocks": 5,
     "score_min_etfs": 4,
-    "price_min_stocks": 2.00,
+    "price_min_stocks": 5.00,      # v3 : était 2.00 (revert au passage réel IBKR)
+    "price_min_etfs": 10.00,       # v3 : NOUVEAU (était = price_min_stocks implicite)
     "price_max_stocks": 300.00,
     "price_max_etfs": 300.00,
     "scan_interval_minutes": 60,
@@ -98,9 +112,9 @@ CONFIG = {
         "lookback_bars": 48,
         "swing_window": 3,
         "structure_buffer_atr": 0.35,
-        "min_sl_atr": 0.70,
+        "min_sl_atr": 0.55,        # v3 : était 0.70 (revert au passage réel IBKR)
         "max_sl_atr": 3.00,
-        "min_sl_pct": 0.50,
+        "min_sl_pct": 0.35,        # v3 : était 0.50 (revert au passage réel IBKR)
         "max_sl_pct": 3.00,
         "breakout_tolerance_pct": 0.35,
         "support_resistance_tolerance_pct": 0.50,
@@ -136,7 +150,7 @@ CONFIG = {
     "short_adjustment": {
         "sl_widening_pct": 0.4,
         "trail_widening_pct": 0.2,
-        "gap_min_short": -2.5,
+        "gap_min_short": -1.5,     # v3 : était -2.5 (revert au passage réel IBKR)
         "vol_ratio_min_short": 0.9,
         "etf_gap_min_short": -0.75,
         "price_max_short_stock": 999.0,
@@ -293,6 +307,7 @@ MAX_SPREAD_PCT = CONFIG["max_spread_pct"]
 SCORE_MIN_STOCKS = CONFIG["score_min_stocks"]
 SCORE_MIN_ETFS = CONFIG["score_min_etfs"]
 PRICE_MIN_STOCKS = CONFIG["price_min_stocks"]
+PRICE_MIN_ETFS = CONFIG["price_min_etfs"]      # v3 : nouvelle constante
 PRICE_MAX_STOCKS = CONFIG["price_max_stocks"]
 PRICE_MAX_ETFS = CONFIG["price_max_etfs"]
 SCAN_INTERVAL = CONFIG["scan_interval_minutes"]
@@ -1387,9 +1402,9 @@ def validate_sl_bounds_only(structural_sl):
         return None
     sl_pct = float(structural_sl["sl_pct"])
     sl_atr = structural_sl.get("sl_atr")
-    min_sl = float(TECH_STRUCTURE_CONFIG.get("min_sl_pct", 0.50))
+    min_sl = float(TECH_STRUCTURE_CONFIG.get("min_sl_pct", 0.35))       # v3 : 0.50 → 0.35
     max_sl = float(TECH_STRUCTURE_CONFIG.get("max_sl_pct", 3.00))
-    min_atr = float(TECH_STRUCTURE_CONFIG.get("min_sl_atr", 0.70))
+    min_atr = float(TECH_STRUCTURE_CONFIG.get("min_sl_atr", 0.55))      # v3 : 0.70 → 0.55
     max_atr = float(TECH_STRUCTURE_CONFIG.get("max_sl_atr", 3.00))
     if sl_pct < min_sl or sl_pct > max_sl:
         return None
@@ -1644,7 +1659,8 @@ def analyze_stock(ticker, regime=None, verbose=True):
             return None
         gap = ((price - prev_close) / prev_close) * 100
 
-        gap_min_long = 2 + regime.get("gap_min_long_adj", 0.0)
+        # v3 : gap_min_long 2.0 → 1.0 (revert au passage réel IBKR)
+        gap_min_long = 1.0 + regime.get("gap_min_long_adj", 0.0)
         gap_max_short = SHORT_GAP_MIN - regime.get("gap_min_short_adj", 0.0)
 
         score = 0
@@ -1929,7 +1945,8 @@ def analyze_etf(ticker, regime=None):
                 price = hist["Close"].iloc[-1]
             else:
                 return None
-        if price < PRICE_MIN_STOCKS or price > PRICE_MAX_ETFS:
+        # v3 : utilise PRICE_MIN_ETFS (10.00) au lieu de PRICE_MIN_STOCKS
+        if price < PRICE_MIN_ETFS or price > PRICE_MAX_ETFS:
             return None
         bid = info.get("bid")
         ask = info.get("ask")
