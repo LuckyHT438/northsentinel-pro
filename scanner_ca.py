@@ -10,23 +10,41 @@
 # >>> v4 — CORRECTIFS COHÉRENCE 2026-11-02 (post-diagnostic) <<<
 #   P0 — bugs bloquants :
 #     C1. return None if SHORT else None → ne rejette plus les LONGs
-#     C2. vol_ratio_min_short : 0.9 → 0.3 (réaliste en intraday)
-#     C3. choppy_score_penalty : 1 → 0 (ETF 5/5 impossible avant)
-#     C4. SL auto-élargi au minimum au lieu d'être rejeté ;
-#         validate_sl_bounds_only ne rejette plus que le TROP LARGE
-#     C5. Précision R/R : tolérance 1e-6 (bug 2.50 < 2.5)
+#     C2. vol_ratio_min_short : 0.9 → 0.3
+#     C3. choppy_score_penalty : 1 → 0
+#     C4. SL auto-élargi au minimum au lieu d'être rejeté
+#     C5. Précision R/R : tolérance 1e-6
 #   P1 — calibration / cohérence :
 #     C6. weak_setup_max_rr : 3.5 → 4.5 ; lower_mult : 0.55 → 0.40
-#         + fallback si fenêtres R/R/ATR disjointes
 #     C7. gap_min_long : 1.0 → 0.5 ; gap_min_short : -1.5 → -1.0
-#     C8. Synthetic L2 calculé AVANT calibration TP (plus de L2=50
-#         par défaut qui faussait la conviction et le plafond R/R)
+#     C8. Synthetic L2 calculé AVANT calibration TP
 #     C9. RVOL x0.00 = donnée manquante (pas rejet)
 #     C10. rvol_apply_reject_after_min : 585 → 660
 #     C11. heldPercentInstitutions manquant → inst_interest neutre (5)
-#     C12. Univers nettoyé (tickers à rejets quotidiens retirés)
-#     C13. Compteurs de rejets par scan dans les logs
+#     C12. Univers nettoyé
+#     C13. Compteurs de rejets par scan
 #   Application de sl_mult_adj du régime (High Vol élargit le buffer)
+#
+# >>> v4.1 — CORRECTIFS BIAIS DIRECTIONNEL 2026-11-03 (post-jour 1) <<<
+#   F1. vol_ratio_min_short : 0.3 → 0.0
+#       Motif : 49 SHORTs tués au volume le 3/11 (LUN, T, LSPD, ATD, L,
+#       EMP-A, GIB-A, OTEX, DSG, CS, BAM, BN, NTR, AQN, REI-UN, QSR,
+#       GIL, TRI, ABX, K, WN, IFC, AEM, WPM, EQX, CAR-UN…). À 09:45
+#       le volume cumulé est ~4% du volume quotidien, un seuil de 0.3
+#       exige 8× le volume normal → élimination automatique.
+#       Le RVOL intraday reste seul juge de liquidité (correctement
+#       normalisé par construction).
+#   F2. gap_min_short : -1.0 → -0.5
+#       Motif : symétrie avec gap_min_long = +0.5. Avec l'ancien ratio
+#       1:2, la probabilité qu'un titre satisfasse la borne SHORT était
+#       mécaniquement deux fois plus faible que pour la borne LONG.
+#   F3. Sélection finale : best LONG + best SHORT indépendants
+#       Motif : la logique "pair/fallback" avec priority_threshold=12
+#       ne firait jamais, retombait systématiquement sur
+#       "top absolu" → 100% LONG sur journée verte. v4.1 expose les
+#       deux directions quand elles existent (jusqu'à 2 setups / scan).
+#       Aucun plancher de priorité appliqué : si c'est valide, c'est
+#       montré. Bruit éventuel → traité en v4.2 après debrief.
 # ============================================================
 
 import requests
@@ -122,8 +140,8 @@ CONFIG = {
     "short_adjustment": {
         "sl_widening_pct": 0.4,
         "trail_widening_pct": 0.2,
-        "gap_min_short": -1.0,
-        "vol_ratio_min_short": 0.3,
+        "gap_min_short": -0.5,         # v4.1 — F2 : -1.0 → -0.5 (symétrie LONG)
+        "vol_ratio_min_short": 0.0,    # v4.1 — F1 : 0.3 → 0.0 (filtre mort)
         "etf_gap_min_short": -0.75,
         "price_max_short_stock": 999.0,
         "price_max_short_etf": 999.0,
@@ -622,9 +640,8 @@ def detect_market_regime(verbose=True):
         elif regime == "Trending-Down":
             gap_min_long_adj = gap_penalty
         elif regime == "Choppy-Volatile":
-            # v4 — C3 : plus de pénalité de score en Choppy (5/5 sur ETF était impossible)
-            score_min_stock_adj = REGIME_CONFIG["choppy_score_penalty"]  # 0
-            score_min_etf_adj = REGIME_CONFIG["choppy_score_penalty"]    # 0
+            score_min_stock_adj = REGIME_CONFIG["choppy_score_penalty"]
+            score_min_etf_adj = REGIME_CONFIG["choppy_score_penalty"]
         elif regime == "Ranging":
             tp_mult_adj = REGIME_CONFIG["tp_mult_ranging"]
 
@@ -903,8 +920,6 @@ def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=No
         return neutral_result
 
 def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
-    """v4 — C11 : retourne held_missing pour neutraliser la pénalité
-    quand heldPercentInstitutions est absent (fréquent sur TSX/TSXV)."""
     score = 0
     details = {}
     raw_held = info.get("heldPercentInstitutions")
@@ -934,7 +949,6 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
         score += 1
     score = min(score, 10)
     if held_missing:
-        # v4 — C11 : neutralise la pénalité inst<=3 si donnée absente
         score = max(score, 5)
     details["total"] = score
     return score, details
@@ -1158,8 +1172,6 @@ def get_min_rr_for_regime(regime):
     return table.get(regime_name, REGIME_CONFIG.get("min_rr_default", 2.0))
 
 def adjust_risk_with_factors(base_tp_pct, spread_pct, vol_ratio, cap_category, gap, held_pct):
-    """v4 : ne touche plus au SL (le SL est ancré structurellement
-    puis élargi au minimum par calculate_structural_sl)."""
     tp_pct = base_tp_pct
     trail_adj = 0.0
     if vol_ratio > 2.0:
@@ -1291,11 +1303,6 @@ def detect_setup_structure(hist, price, direction, gap, vwap=None, poc=None):
         }
 
 def calculate_structural_sl(entry, direction, structure, regime_sl_mult=1.0):
-    """v4 — C4 + application sl_mult_adj :
-    - Le buffer structurel est élargi en régime High Vol (sl_mult_adj)
-    - Le SL est ensuite auto-élargi au minimum autorisé au lieu de
-      rejeter le setup (contradiction buffer 0.35 ATR vs min 0.55 ATR
-      qui causait des rejets silencieux de setups 6/7)."""
     if not structure or entry <= 0:
         return None
     invalidation = structure.get("invalidation_level")
@@ -1337,8 +1344,6 @@ def calculate_structural_sl(entry, direction, structure, regime_sl_mult=1.0):
     }
 
 def validate_sl_bounds_only(structural_sl):
-    """v4 — C4 : ne rejette plus que le TROP LARGE (le min est déjà
-    garanti par l'auto-élargissement dans calculate_structural_sl)."""
     if not structural_sl:
         return None
     sl_pct = float(structural_sl["sl_pct"])
@@ -1489,9 +1494,6 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
 
         valid.append((price, label, dist_pct))
 
-    # v4 — C6 : fallback si fenêtre ATR et plafond R/R disjoints.
-    # On relâche ref_lo (borne basse ATR) car c'est elle qui crée le conflit ;
-    # on conserve min_dist_pct_rr (R/R min) et max_dist_pct_rr_cap (plafond R/R).
     fallback_used = False
     if not valid and constraints_disjoint:
         fallback_used = True
@@ -1513,7 +1515,6 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
                 continue
             if max_dist_pct_rr_cap is not None and dist_pct > max_dist_pct_rr_cap:
                 continue
-            # PAS de contrainte ref_lo dans le fallback
             valid.append((price, label, dist_pct))
 
     if not valid:
@@ -1584,8 +1585,6 @@ def calculate_intraday_rvol_from_hist(hist):
         cutoff = today_bars.index[-1].time()
         today_vol = float(today_bars["Volume"].sum())
 
-        # v4 — C9 : si le volume d'aujourd'hui est 0 ou manquant, on renvoie
-        # None (donnée manquante) au lieu d'un RVOL x0.00 trompeur.
         if today_vol <= 0:
             return None
 
@@ -1637,7 +1636,6 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
             return None
         gap = ((price - prev_close) / prev_close) * 100
 
-        # v4 — C7 : gap_min_long 1.0 → 0.5, gap_min_short -1.5 → -1.0
         gap_min_long = 0.5 + regime.get("gap_min_long_adj", 0.0)
         gap_max_short = SHORT_GAP_MIN - regime.get("gap_min_short_adj", 0.0)
 
@@ -1674,18 +1672,13 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
         avg_vol = info.get("averageVolume", volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
 
-        # v4 — C1 : ne rejette plus les LONGs sur vol_ratio. Seul le SHORT
-        # a un plancher de liquidité strict (C2 : 0.3).
+        # v4.1 — F1 : plus de rejet volume dur. Le RVOL intraday est le
+        # seul juge de liquidité (correctement normalisé par construction).
+        # Le point bonus pour vol_ratio > threshold reste attribué aux SHORTs
+        # au-dessus de SHORT_VOL_MIN (= 0.0 désormais, donc toujours).
         vol_threshold = SHORT_VOL_MIN if direction == "SHORT" else 0.0
         if vol_ratio > vol_threshold:
             score += 1
-        else:
-            if direction == "SHORT":
-                if verbose:
-                    print(f"  ❌ SHORT: vol_ratio {vol_ratio:.2f} < {SHORT_VOL_MIN}", flush=True)
-                reject_stats["vol_ratio"] = reject_stats.get("vol_ratio", 0) + 1
-                return None
-            # LONG avec vol_ratio faible : on continue, pas de point bonus.
 
         float_shares = info.get("floatShares")
         if float_shares is not None and float_shares < 100_000_000:
@@ -1727,12 +1720,10 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
         rvol = calculate_intraday_rvol_from_hist(structure_hist) \
                if INTRADAY_FILTERS.get("rvol_enabled", True) else None
 
-        # v4 — C9 : RVOL x0.00 = donnée manquante, pas un signal
         if rvol is not None and rvol <= 0.01:
             rvol = None
 
         now_min = datetime.now(MONTREAL_TZ).hour * 60 + datetime.now(MONTREAL_TZ).minute
-        # v4 — C10 : rejet RVOL appliqué seulement après 11:00
         if rvol is not None and now_min >= INTRADAY_FILTERS.get("rvol_apply_reject_after_min", 660):
             if rvol < INTRADAY_FILTERS.get("rvol_reject_below", 0.5):
                 if verbose:
@@ -1776,7 +1767,6 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
                 print(f"     ⚠️ ATR indisponible — référence de distance via gap/score", flush=True)
 
         structure = detect_setup_structure(structure_hist, price, direction, gap, vwap, poc)
-        # v4 — C4 : sl_mult_adj du régime appliqué sur le buffer
         structural_sl = calculate_structural_sl(
             price, direction, structure, regime_sl_mult=regime.get("sl_mult_adj", 1.0)
         )
@@ -1808,7 +1798,6 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
                 flush=True
             )
 
-        # v4 — C8 : L2 calculé AVANT calibration TP
         l2_result = calculate_synthetic_l2(
             ticker=ticker, direction=direction, current_price=price,
             spread_pct=spread_pct, vwap=vwap, poc=poc, verbose=False
@@ -1868,7 +1857,6 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
             reject_stats["tp"] = reject_stats.get("tp", 0) + 1
             return None
 
-        # v4 — C5 : tolérance 1e-6 sur comparaison R/R
         if tp_final <= 0 or sl_final <= 0 or (tp_final / sl_final) < (min_rr - 1e-6):
             if verbose:
                 print(
@@ -2039,12 +2027,10 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
         rvol = calculate_intraday_rvol_from_hist(structure_hist) \
                if INTRADAY_FILTERS.get("rvol_enabled", True) else None
 
-        # v4 — C9 : RVOL x0.00 = donnée manquante
         if rvol is not None and rvol <= 0.01:
             rvol = None
 
         now_min = datetime.now(MONTREAL_TZ).hour * 60 + datetime.now(MONTREAL_TZ).minute
-        # v4 — C10 : rejet RVOL après 11:00
         if rvol is not None and now_min >= INTRADAY_FILTERS.get("rvol_apply_reject_after_min", 660):
             if rvol < INTRADAY_FILTERS.get("rvol_reject_below", 0.5):
                 print(f"  ❌ ETF {ticker}: RVOL intraday x{rvol:.2f} trop faible", flush=True)
@@ -2087,7 +2073,6 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
             tp_ref *= regime.get("tp_mult_adj", 1.0)
 
         structure = detect_setup_structure(structure_hist, price, direction, gap, vwap, poc)
-        # v4 — C4 : sl_mult_adj appliqué
         structural_sl = calculate_structural_sl(
             price, direction, structure, regime_sl_mult=regime.get("sl_mult_adj", 1.0)
         )
@@ -2113,7 +2098,6 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
             reject_stats["sl"] = reject_stats.get("sl", 0) + 1
             return None
 
-        # v4 — C8 : L2 calculé AVANT calibration TP
         l2_result = calculate_synthetic_l2(
             ticker=ticker, direction=direction, current_price=price,
             spread_pct=spread_pct, vwap=vwap, poc=poc, verbose=False
@@ -2170,7 +2154,6 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
             reject_stats["tp"] = reject_stats.get("tp", 0) + 1
             return None
 
-        # v4 — C5 : tolérance 1e-6
         if tp_final <= 0 or sl_final <= 0 or (tp_final / sl_final) < (min_rr - 1e-6):
             print(
                 f"  ❌ ETF {ticker}: R/R final {tp_final/sl_final:.2f}:1 < min {min_rr:.1f}:1",
@@ -2375,6 +2358,38 @@ def _print_reject_stats(stats, label):
     detail = " ".join(f"{k}={v}" for k, v in non_zero.items())
     print(f"  📊 Rejets {label}: {detail}", flush=True)
 
+def _select_best_per_direction(stocks_results, etfs_results, market_bias):
+    """v4.1 — F3 : sélectionne indépendamment le meilleur LONG et le meilleur SHORT,
+    stocks et ETFs confondus. Remplace la logique pair/fallback de v4."""
+    best_long = None
+    best_long_is_etf = False
+    best_long_ps = float("-inf")
+
+    best_short = None
+    best_short_is_etf = False
+    best_short_ps = float("-inf")
+
+    for cand in stocks_results:
+        ps = calculate_priority_score(cand, market_bias, False)
+        if cand["direction"] == "LONG" and ps > best_long_ps:
+            best_long, best_long_is_etf, best_long_ps = cand, False, ps
+        elif cand["direction"] == "SHORT" and ps > best_short_ps:
+            best_short, best_short_is_etf, best_short_ps = cand, False, ps
+
+    for cand in etfs_results:
+        ps = calculate_priority_score(cand, market_bias, True)
+        if cand["direction"] == "LONG" and ps > best_long_ps:
+            best_long, best_long_is_etf, best_long_ps = cand, True, ps
+        elif cand["direction"] == "SHORT" and ps > best_short_ps:
+            best_short, best_short_is_etf, best_short_ps = cand, True, ps
+
+    selected_items = []
+    if best_long is not None:
+        selected_items.append((best_long, best_long_is_etf))
+    if best_short is not None:
+        selected_items.append((best_short, best_short_is_etf))
+    return selected_items
+
 def main():
     now = datetime.now(MONTREAL_TZ)
     heure = now.hour
@@ -2488,55 +2503,8 @@ def main():
 
             print(f"🧠 SYNTHETIC L2 déjà intégré au pipeline (calculé pré-calibration TP).", flush=True)
 
-            stock_long = [s for s in stocks_results if s["direction"] == "LONG"]
-            stock_short = [s for s in stocks_results if s["direction"] == "SHORT"]
-            etf_long = [e for e in etfs_results if e["direction"] == "LONG"]
-            etf_short = [e for e in etfs_results if e["direction"] == "SHORT"]
-
-            def get_best(candidates, is_etf):
-                if not candidates:
-                    return None
-                scored = []
-                for cand in candidates:
-                    ps = calculate_priority_score(cand, market_bias, is_etf)
-                    scored.append((ps, cand))
-                scored.sort(key=lambda x: x[0], reverse=True)
-                return scored[0][1]
-
-            selected_stock = None
-            selected_etf = None
-
-            pair_candidates = []
-            threshold = SYNTHETIC_L2_CONFIG["priority_threshold_for_pair"]
-            for s in stocks_results:
-                for e in etfs_results:
-                    if s["direction"] != e["direction"]:
-                        ps = calculate_priority_score(s, market_bias, False)
-                        pe = calculate_priority_score(e, market_bias, True)
-                        if ps >= threshold and pe >= threshold:
-                            pair_candidates.append((ps + pe, ps, pe, s, e))
-            if pair_candidates:
-                pair_candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
-                _, _, _, selected_stock, selected_etf = pair_candidates[0]
-            else:
-                all_candidates = []
-                for cand in stocks_results:
-                    all_candidates.append((calculate_priority_score(cand, market_bias, False), cand, False))
-                for cand in etfs_results:
-                    all_candidates.append((calculate_priority_score(cand, market_bias, True), cand, True))
-                all_candidates.sort(key=lambda x: x[0], reverse=True)
-                if all_candidates:
-                    _, best, is_etf = all_candidates[0]
-                    if is_etf:
-                        selected_etf = best
-                    else:
-                        selected_stock = best
-
-            selected_items = []
-            if selected_stock:
-                selected_items.append((selected_stock, False))
-            if selected_etf:
-                selected_items.append((selected_etf, True))
+            # v4.1 — F3 : sélection best LONG + best SHORT indépendants
+            selected_items = _select_best_per_direction(stocks_results, etfs_results, market_bias)
 
             now_scan = datetime.now(MONTREAL_TZ)
             header = (
