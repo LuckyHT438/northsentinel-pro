@@ -7,52 +7,26 @@
 #   - AM : déclenché à 09:30 ET → scans 09:45, 10:30, 11:15
 #   - PM : déclenché à 14:00 ET → scans 14:00, 15:00
 #
-# SYNTHETIC L2 : utilisé pour la confirmation / Priority Rank / conviction.
-# Aucun affichage dans le message Telegram.
-#
-# >>> TP UNIQUE STRUCTUREL (2026-10-02) <<<
-# >>> MESSAGE TELEGRAM TOUJOURS ENVOYÉ (2026-10-05) <<<
-# >>> CORRECTIF TRAILING STOP (2026-10-06) <<<
-# >>> TP DOIT COUVRIR LES FRAIS IBKR (2026-10-07) <<<
-# >>> CORRECTIF FRAIS IBKR — MODÈLE FIXE (2026-10-07) <<<
-# >>> TRAILING STOP AVEC PRIX + % (2026-10-07) <<<
-# >>> CORRECTIF TP CALIBRATION CONTEXTUELLE (2026-10-09) <<<
-#     - Multiplicateur TP contre-tendance (Trending-Down+LONG / Trending-Up+SHORT)
-#     - Pénalité conviction (Low / Moderate)
-#     - Pénalité intérêt institutionnel (<=3 / ==4)
-#     - Cap temporel du TP selon l'heure du scan
-#     - Plafond R/R sur setup faible (Low + inst<=3)
-#     - Garde-fou final : TP > 1.5×ATR sur setup faible → rejet
-# >>> CORRECTIF TP CALIBRATION v2 (2026-10-09) <<<
-#     - Cap temporel désormais RELATIF à l'ATR du titre (atr_mult),
-#       le plus restrictif entre cap absolu et cap ATR s'applique.
-#     - Relâchement calibré : conviction Low 0.85, inst<=3 0.90,
-#       weak_setup_max_rr 3.5, fenêtre ATR structurelle [0.55×; 1.70×].
-#     - Message dédié quand les contraintes R/R et la fenêtre ATR
-#       sont disjointes (setup structurellement infaisable).
-# >>> SILENCE MESSAGE JOUR FERMÉ (2026-10-12) <<<
-#     Aucun message Telegram n'est envoyé si le marché est fermé
-#     (week-end, jour férié, fermeture exceptionnelle), que le script
-#     soit lancé manuellement ou via un job programmé.
-# >>> CORRECTIF v3 — FILTRES D'ENTRÉE DESSERRÉS (2026-10-16) <<<
-#     Objectif : augmenter le taux de validation (11 setups / 50 scans
-#     observés du 5 au 16 octobre). Analyse : ~90% des rejets viennent
-#     du filtre GAP, pas de la calibration TP.
-#     6 changements :
-#       1. price_min_stocks  : 2.00  → 5.00 $  (frais IBKR fixed)
-#       2. price_min_etfs    : N/A   → 10.00 $ (nouveau, protège ETF lev.)
-#       3. gap_min_short     : -2.5  → -1.5 %  (short stocks)
-#       4. min_sl_pct        : 0.50  → 0.35 %  (structure serrée)
-#       5. min_sl_atr        : 0.70  → 0.55    (idem)
-#       6. gap_min_long stk  : 2.0   → 1.0 %   (codé en dur dans analyze_stock)
-#     >>> REVERT EN RÉEL IBKR : remettre ces 6 valeurs à leurs niveaux
-#         d'origine. Chacune porte un commentaire "# v3 :".
-# >>> DÉTECTION DE RÉGIME DE MARCHÉ <<<
-# >>> CORRECTIFS ASYMÉTRIQUES SHORT <<<
-# >>> AMÉLIORATIONS #2 / #7 <<<
-# >>> FERMETURE IMMÉDIATE APRÈS LE DERNIER SCAN <<<
-# >>> HEARTBEAT ANTI-TIMEOUT <<<
-# >>> GARDE-FOUS DIRECTIONNELS (DÉSACTIVÉS PAR DÉFAUT) <<<
+# >>> v4 — CORRECTIFS COHÉRENCE 2026-11-02 (post-diagnostic) <<<
+#   P0 — bugs bloquants :
+#     C1. return None if SHORT else None → ne rejette plus les LONGs
+#     C2. vol_ratio_min_short : 0.9 → 0.3 (réaliste en intraday)
+#     C3. choppy_score_penalty : 1 → 0 (ETF 5/5 impossible avant)
+#     C4. SL auto-élargi au minimum au lieu d'être rejeté ;
+#         validate_sl_bounds_only ne rejette plus que le TROP LARGE
+#     C5. Précision R/R : tolérance 1e-6 (bug 2.50 < 2.5)
+#   P1 — calibration / cohérence :
+#     C6. weak_setup_max_rr : 3.5 → 4.5 ; lower_mult : 0.55 → 0.40
+#         + fallback si fenêtres R/R/ATR disjointes
+#     C7. gap_min_long : 1.0 → 0.5 ; gap_min_short : -1.5 → -1.0
+#     C8. Synthetic L2 calculé AVANT calibration TP (plus de L2=50
+#         par défaut qui faussait la conviction et le plafond R/R)
+#     C9. RVOL x0.00 = donnée manquante (pas rejet)
+#     C10. rvol_apply_reject_after_min : 585 → 660
+#     C11. heldPercentInstitutions manquant → inst_interest neutre (5)
+#     C12. Univers nettoyé (tickers à rejets quotidiens retirés)
+#     C13. Compteurs de rejets par scan dans les logs
+#   Application de sl_mult_adj du régime (High Vol élargit le buffer)
 # ============================================================
 
 import requests
@@ -83,8 +57,8 @@ CONFIG = {
     "max_spread_pct": 5.0,
     "score_min_stocks": 5,
     "score_min_etfs": 4,
-    "price_min_stocks": 5.00,      # v3 : était 2.00 (revert au passage réel IBKR)
-    "price_min_etfs": 10.00,       # v3 : NOUVEAU (était = price_min_stocks implicite)
+    "price_min_stocks": 5.00,
+    "price_min_etfs": 10.00,
     "price_max_stocks": 300.00,
     "price_max_etfs": 300.00,
     "scan_interval_minutes": 60,
@@ -112,9 +86,9 @@ CONFIG = {
         "lookback_bars": 48,
         "swing_window": 3,
         "structure_buffer_atr": 0.35,
-        "min_sl_atr": 0.55,        # v3 : était 0.70 (revert au passage réel IBKR)
+        "min_sl_atr": 0.55,
         "max_sl_atr": 3.00,
-        "min_sl_pct": 0.35,        # v3 : était 0.50 (revert au passage réel IBKR)
+        "min_sl_pct": 0.35,
         "max_sl_pct": 3.00,
         "breakout_tolerance_pct": 0.35,
         "support_resistance_tolerance_pct": 0.50,
@@ -129,8 +103,6 @@ CONFIG = {
         "lookback_bars": 30,
         "short_window": 5,
         "medium_window": 15,
-        "max_candidates_stocks": 12,
-        "max_candidates_etfs": 8,
         "strong_threshold": 75,
         "supportive_threshold": 60,
         "neutral_threshold": 40,
@@ -150,8 +122,8 @@ CONFIG = {
     "short_adjustment": {
         "sl_widening_pct": 0.4,
         "trail_widening_pct": 0.2,
-        "gap_min_short": -1.5,     # v3 : était -2.5 (revert au passage réel IBKR)
-        "vol_ratio_min_short": 0.9,
+        "gap_min_short": -1.0,
+        "vol_ratio_min_short": 0.3,
         "etf_gap_min_short": -0.75,
         "price_max_short_stock": 999.0,
         "price_max_short_etf": 999.0,
@@ -168,7 +140,7 @@ CONFIG = {
         "high_vol_atr_percentile": 75,
         "low_vol_atr_percentile": 25,
         "counter_trend_gap_penalty": 0.5,
-        "choppy_score_penalty": 1,
+        "choppy_score_penalty": 0,
         "sl_mult_high_vol": 1.25,
         "sl_mult_low_vol": 0.90,
         "tp_mult_ranging": 0.90,
@@ -176,65 +148,41 @@ CONFIG = {
             "Trending-Up": 1.6,
             "Trending-Down": 1.6,
             "Ranging": 2.0,
-            "Choppy-Volatile": 2.5,
+            "Choppy-Volatile": 2.2,
             "Unknown": 2.0
         },
         "min_rr_default": 2.0
     },
 
-    # === AJOUT 2026-10-09 / v2 ===
-    # Calibration contextuelle du TP : pénalise les setups faibles,
-    # contre-tendance, ou tardifs dans la séance.
     "tp_calibration": {
         "enable": True,
-
-        # Multiplicateur TP appliqué selon régime ET sens du trade.
-        # Trending-Down + LONG → LONG contre-tendance en marché baissier.
-        # Trending-Up   + SHORT → SHORT contre-tendance en marché haussier.
         "counter_trend_regime_mult": {
             "Trending-Down_LONG": 0.80,
             "Trending-Up_SHORT": 0.80,
         },
-
-        # Pénalité selon le label de conviction produit par calculate_conviction.
-        # v2 : Low 0.80 → 0.85, Moderate inchangé.
         "conviction_mult": {
             "Low": 0.85,
             "Moderate": 0.92,
             "High": 1.00,
         },
-
-        # Pénalité selon le score d'intérêt institutionnel (0-10).
-        # v2 : le3 0.85 → 0.90, eq4 inchangé.
         "inst_interest_mult": {
             "le3": 0.90,
             "eq4": 0.95,
             "ge5": 1.00,
         },
-
-        # Cap du TP selon l'heure ET du scan (minutes depuis minuit).
-        # v2 : cap_pct = plafond dur absolu (relevé), atr_mult = plafond
-        #      relatif à l'ATR quotidien du titre. Le plus petit s'applique.
-        # null partout = pas de cap.
         "time_caps": [
-            {"end_min": 600,  "cap_pct": None, "atr_mult": None},  # avant 10:00
-            {"end_min": 690,  "cap_pct": 5.5,  "atr_mult": 4.5},   # 10:00 – 11:29
-            {"end_min": 840,  "cap_pct": 4.5,  "atr_mult": 3.5},   # 11:30 – 13:59
-            {"end_min": 1440, "cap_pct": 3.5,  "atr_mult": 3.0},   # 14:00 et après
+            {"end_min": 600,  "cap_pct": None, "atr_mult": None},
+            {"end_min": 690,  "cap_pct": 5.5,  "atr_mult": 4.5},
+            {"end_min": 840,  "cap_pct": 4.5,  "atr_mult": 3.5},
+            {"end_min": 1440, "cap_pct": 3.5,  "atr_mult": 3.0},
         ],
-
-        # Plafond dur de R/R sur setup faible (conv Low ET inst<=3).
-        # v2 : 2.5 → 3.5 (relâchement modéré pour débloquer les SL serrés).
-        "weak_setup_max_rr": 3.5,
-
-        # Garde-fou final : si TP dépasse ce multiple d'ATR quotidien
-        # sur un setup faible (conv Low ET inst<=3), le setup est rejeté.
+        "weak_setup_max_rr": 4.5,
         "atr_hard_cap_mult": 1.5,
     },
 
     "intraday_filters": {
         "timing_penalty_windows": [
-            {"start_min": 570, "end_min": 585, "penalty": 1},   # 09:30–09:45
+            {"start_min": 570, "end_min": 585, "penalty": 1},
         ],
 
         "rvol_enabled": True,
@@ -245,12 +193,11 @@ CONFIG = {
         "rvol_bonus_strong": 1.5,
         "rvol_bonus_moderate": 0.5,
         "rvol_penalty_weak": -1.0,
-        "rvol_apply_reject_after_min": 585,
+        "rvol_apply_reject_after_min": 660,
 
         "structural_tp_enabled": True,
-        # v2 : fenêtre élargie 0.70→0.55 en bas, 1.50→1.70 en haut.
-        "structural_tp_atr_lower_mult": 0.55,
-        "structural_tp_atr_upper_mult": 1.70,
+        "structural_tp_atr_lower_mult": 0.40,
+        "structural_tp_atr_upper_mult": 1.80,
     },
 
     "tickers": {
@@ -262,10 +209,9 @@ CONFIG = {
             "BNS.TO",
             "ATZ.TO", "GRGD.TO", "SPCX.TO", "ATD.TO",
             "MRU.TO", "L.TO", "EMP-A.TO", "CP.TO", "CNR.TO",
-            "TFII.TO", "MDA.TO", "BBD-B.TO", "CGO.TO", "QBR-B.TO",
+            "TFII.TO", "MDA.TO", "CGO.TO", "QBR-B.TO",
             "IFC.TO", "SLF.TO", "RBA.TO", "CGY.TO",
             "NA.TO",
-            "WELL.TO",
             "GIB-A.TO", "OTEX.TO", "DSG.TO", "CS.TO",
             "CAR-UN.TO",
             "AEM.TO", "WPM.TO", "EQX.TO", "LUG.TO",
@@ -273,17 +219,17 @@ CONFIG = {
             "TD.TO", "CM.TO", "AQN.TO",
             "ENB.TO", "ARX.TO", "VET.TO", "REI-UN.TO", "TCW.TO",
             "TSAT.TO", "IVN.TO", "HBM.TO", "MTY.TO", "QSR.TO",
-            "SHOP.TO", "KEEL.TO",
+            "SHOP.TO",
             "WN.TO", "HPS-A.TO", "EXE.TO",
             "TOI.V", "ZDC.V", "QNC.V",
-            "BTE.TO", "FR.TO", "SIL.TO", "EQB.TO", "TRI.TO", "GIL.TO"
+            "BTE.TO", "EQB.TO", "TRI.TO", "GIL.TO"
         ],
         "etfs": [
             "XFN.TO", "ZEB.TO", "XEG.TO", "ZEO.TO", "XGD.TO",
-            "XMA.TO", "XIT.TO", "XST.TO", "XRE.TO", "XUT.TO",
+            "XMA.TO", "XST.TO", "XRE.TO", "XUT.TO",
             "ZSP.TO", "XIC.TO", "HCLN.TO", "HHIS.TO", "HXS.TO",
             "HXQ.TO", "VFV.TO", "XQQ.TO", "HHL.TO", "TXF.TO",
-            "HUTL.TO", "ZDI.TO", "VI.TO", "VRE.TO", "FIE.TO",
+            "HUTL.TO", "ZDI.TO", "FIE.TO",
             "FBTC.TO", "ZWA.TO",
             "XIU.TO", "ZCN.TO", "HNU.TO", "HOU.TO", "ZUB.TO",
             "ZFL.TO", "DLR.TO", "ZWB.TO", "HXT.TO",
@@ -307,7 +253,7 @@ MAX_SPREAD_PCT = CONFIG["max_spread_pct"]
 SCORE_MIN_STOCKS = CONFIG["score_min_stocks"]
 SCORE_MIN_ETFS = CONFIG["score_min_etfs"]
 PRICE_MIN_STOCKS = CONFIG["price_min_stocks"]
-PRICE_MIN_ETFS = CONFIG["price_min_etfs"]      # v3 : nouvelle constante
+PRICE_MIN_ETFS = CONFIG["price_min_etfs"]
 PRICE_MAX_STOCKS = CONFIG["price_max_stocks"]
 PRICE_MAX_ETFS = CONFIG["price_max_etfs"]
 SCAN_INTERVAL = CONFIG["scan_interval_minutes"]
@@ -338,7 +284,7 @@ SYNTHETIC_L2_CONFIG = CONFIG["synthetic_l2"]
 REGIME_CONFIG = CONFIG["regime"]
 INTRADAY_FILTERS = CONFIG["intraday_filters"]
 DIRECTION_CONTROL = CONFIG["direction_control"]
-TP_CALIBRATION = CONFIG["tp_calibration"]  # === AJOUT 2026-10-09 ===
+TP_CALIBRATION = CONFIG["tp_calibration"]
 
 SHORT_ADJ = CONFIG["short_adjustment"]
 SHORT_SL_WIDENING = SHORT_ADJ["sl_widening_pct"]
@@ -676,8 +622,9 @@ def detect_market_regime(verbose=True):
         elif regime == "Trending-Down":
             gap_min_long_adj = gap_penalty
         elif regime == "Choppy-Volatile":
-            score_min_stock_adj = REGIME_CONFIG["choppy_score_penalty"]
-            score_min_etf_adj = REGIME_CONFIG["choppy_score_penalty"]
+            # v4 — C3 : plus de pénalité de score en Choppy (5/5 sur ETF était impossible)
+            score_min_stock_adj = REGIME_CONFIG["choppy_score_penalty"]  # 0
+            score_min_etf_adj = REGIME_CONFIG["choppy_score_penalty"]    # 0
         elif regime == "Ranging":
             tp_mult_adj = REGIME_CONFIG["tp_mult_ranging"]
 
@@ -723,10 +670,7 @@ def get_timing_penalty():
             penalty += w["penalty"]
     return penalty
 
-# === AJOUT 2026-10-09 : helpers de calibration TP ===
-
 def get_counter_trend_tp_mult(direction, regime_name):
-    """Multiplicateur TP contre-tendance : LONG en Trending-Down, SHORT en Trending-Up."""
     if not TP_CALIBRATION.get("enable", True):
         return 1.0
     if regime_name == "Trending-Down" and direction == "LONG":
@@ -750,11 +694,6 @@ def get_inst_interest_tp_mult(inst_interest):
     return float(TP_CALIBRATION["inst_interest_mult"]["ge5"])
 
 def get_intraday_tp_cap_pct(atr_pct=None):
-    """Cap dur du TP selon l'heure ET courante.
-    v2 : cap_pct (absolu) et atr_mult (relatif à l'ATR du titre). Le plus
-    restrictif des deux s'applique. Si atr_pct est None ou <= 0, seul
-    cap_pct est utilisé (comportement v1).
-    None = pas de cap."""
     if not TP_CALIBRATION.get("enable", True):
         return None
     now = datetime.now(MONTREAL_TZ)
@@ -774,18 +713,14 @@ def get_intraday_tp_cap_pct(atr_pct=None):
     return None
 
 def get_weak_setup_max_rr(conviction_label, inst_interest):
-    """Plafond R/R sur setup faible. None = pas de plafond."""
     if not TP_CALIBRATION.get("enable", True):
         return None
     if conviction_label == "Low" and inst_interest <= 3:
-        return float(TP_CALIBRATION.get("weak_setup_max_rr", 3.5))
+        return float(TP_CALIBRATION.get("weak_setup_max_rr", 4.5))
     return None
 
 def apply_tp_calibration(tp_ref_pct, direction, regime_name, conviction_label,
                           inst_interest, atr_pct=None, verbose=False):
-    """Applique séquentiellement les multiplicateurs + cap temporel.
-    v2 : atr_pct optionnel pour le cap relatif à l'ATR du titre.
-    Retourne (tp_ref_calibré, dict_trace)."""
     if not TP_CALIBRATION.get("enable", True) or tp_ref_pct is None:
         return tp_ref_pct, {}
 
@@ -968,12 +903,17 @@ def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=No
         return neutral_result
 
 def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
+    """v4 — C11 : retourne held_missing pour neutraliser la pénalité
+    quand heldPercentInstitutions est absent (fréquent sur TSX/TSXV)."""
     score = 0
     details = {}
-    held = info.get("heldPercentInstitutions", 0) or 0
+    raw_held = info.get("heldPercentInstitutions")
+    held_missing = raw_held is None
+    held = 0.5 if held_missing else raw_held
     short_ratio = info.get("shortRatio", 0) or 0
     sma50 = info.get("fiftyDayAverage", 0)
     details["held"] = held
+    details["held_missing"] = held_missing
     details["short_ratio"] = short_ratio
     details["vol_ratio"] = vol_ratio
     details["sma50"] = sma50
@@ -982,31 +922,20 @@ def calculate_institutional_interest(info, price, vol_ratio, gap, direction):
     details["direction"] = direction
     if held >= 0.6:
         score += 2
-        details["held_bonus"] = 2
     elif held >= 0.4:
         score += 1
-        details["held_bonus"] = 1
-    else:
-        details["held_bonus"] = 0
     if short_ratio > 3 and direction == "LONG" and gap > 3:
         score += 2
-        details["short_squeeze_bonus"] = 2
-    else:
-        details["short_squeeze_bonus"] = 0
     if vol_ratio > 2 and sma50 and price > sma50:
         score += 2
-        details["volume_sma_bonus"] = 2
     elif vol_ratio > 1.5 and sma50 and price > sma50:
         score += 1
-        details["volume_sma_bonus"] = 1
-    else:
-        details["volume_sma_bonus"] = 0
     if short_ratio > 4 and direction == "SHORT":
         score += 1
-        details["short_high_bonus"] = 1
-    else:
-        details["short_high_bonus"] = 0
     score = min(score, 10)
+    if held_missing:
+        # v4 — C11 : neutralise la pénalité inst<=3 si donnée absente
+        score = max(score, 5)
     details["total"] = score
     return score, details
 
@@ -1228,35 +1157,25 @@ def get_min_rr_for_regime(regime):
     table = REGIME_CONFIG.get("min_rr_by_regime", {})
     return table.get(regime_name, REGIME_CONFIG.get("min_rr_default", 2.0))
 
-def adjust_risk_with_factors(base_tp_pct, base_sl_pct, spread_pct, vol_ratio, cap_category, gap, held_pct):
+def adjust_risk_with_factors(base_tp_pct, spread_pct, vol_ratio, cap_category, gap, held_pct):
+    """v4 : ne touche plus au SL (le SL est ancré structurellement
+    puis élargi au minimum par calculate_structural_sl)."""
     tp_pct = base_tp_pct
-    sl_pct = base_sl_pct
     trail_adj = 0.0
-    if spread_pct > 0.5:
-        sl_pct += 0.2
     if vol_ratio > 2.0:
-        sl_pct -= 0.3
         tp_pct += 0.5
-    elif vol_ratio < 0.5:
-        sl_pct += 0.3
     if cap_category in ["Micro Cap", "Small Cap"]:
-        sl_pct += 0.5
         tp_pct += 1.0
-    elif cap_category in ["Large Cap", "Mega Cap"]:
-        sl_pct -= 0.2
     if abs(gap) > 10:
         tp_pct += 0.5
     if held_pct >= 0.6:
-        sl_pct -= 0.2
         tp_pct -= 0.5
         trail_adj -= 0.5
     elif held_pct <= 0.2:
-        sl_pct += 0.3
         tp_pct += 1.0
         trail_adj += 1.0
-    sl_pct = max(0.5, min(sl_pct, 3.0))
     tp_pct = max(0.5, min(tp_pct, 8.0))
-    return round(tp_pct, 2), round(sl_pct, 2), round(trail_adj, 2)
+    return round(tp_pct, 2), round(trail_adj, 2)
 
 def compute_coherent_trailing(base_trail, trail_adj, sl_final):
     trail = base_trail + trail_adj
@@ -1371,44 +1290,64 @@ def detect_setup_structure(hist, price, direction, gap, vwap=None, poc=None):
             "atr": atr,
         }
 
-def calculate_structural_sl(entry, direction, structure):
+def calculate_structural_sl(entry, direction, structure, regime_sl_mult=1.0):
+    """v4 — C4 + application sl_mult_adj :
+    - Le buffer structurel est élargi en régime High Vol (sl_mult_adj)
+    - Le SL est ensuite auto-élargi au minimum autorisé au lieu de
+      rejeter le setup (contradiction buffer 0.35 ATR vs min 0.55 ATR
+      qui causait des rejets silencieux de setups 6/7)."""
     if not structure or entry <= 0:
         return None
     invalidation = structure.get("invalidation_level")
     atr = structure.get("atr")
     if invalidation is None or atr is None or atr <= 0:
         return None
-    buffer = atr * float(TECH_STRUCTURE_CONFIG.get("structure_buffer_atr", 0.35))
+
+    buffer = atr * float(TECH_STRUCTURE_CONFIG.get("structure_buffer_atr", 0.35)) * regime_sl_mult
+
     if direction == "LONG":
-        stop = float(invalidation) - buffer
+        raw_stop = float(invalidation) - buffer
+    else:
+        raw_stop = float(invalidation) + buffer
+
+    min_sl_pct = float(TECH_STRUCTURE_CONFIG.get("min_sl_pct", 0.35))
+    min_sl_atr = float(TECH_STRUCTURE_CONFIG.get("min_sl_atr", 0.55))
+    min_dist_price_pct = entry * min_sl_pct / 100.0
+    min_dist_price_atr = atr * min_sl_atr
+    min_dist = max(min_dist_price_pct, min_dist_price_atr)
+
+    if direction == "LONG":
+        stop = min(raw_stop, entry - min_dist)
         if stop <= 0 or stop >= entry:
             return None
     else:
-        stop = float(invalidation) + buffer
+        stop = max(raw_stop, entry + min_dist)
         if stop <= entry:
             return None
-    sl_dist = abs(entry-stop)
+
+    sl_dist = abs(entry - stop)
     sl_pct = sl_dist / entry * 100.0
-    sl_atr = sl_dist / atr if atr > 0 else None
+    sl_atr = sl_dist / atr
     return {
         "sl_price": round(stop, 4),
         "sl_pct": sl_pct,
         "sl_atr": sl_atr,
         "buffer": buffer,
+        "widened": abs(stop - raw_stop) > 1e-6,
     }
 
 def validate_sl_bounds_only(structural_sl):
+    """v4 — C4 : ne rejette plus que le TROP LARGE (le min est déjà
+    garanti par l'auto-élargissement dans calculate_structural_sl)."""
     if not structural_sl:
         return None
     sl_pct = float(structural_sl["sl_pct"])
     sl_atr = structural_sl.get("sl_atr")
-    min_sl = float(TECH_STRUCTURE_CONFIG.get("min_sl_pct", 0.35))       # v3 : 0.50 → 0.35
     max_sl = float(TECH_STRUCTURE_CONFIG.get("max_sl_pct", 3.00))
-    min_atr = float(TECH_STRUCTURE_CONFIG.get("min_sl_atr", 0.55))      # v3 : 0.70 → 0.55
     max_atr = float(TECH_STRUCTURE_CONFIG.get("max_sl_atr", 3.00))
-    if sl_pct < min_sl or sl_pct > max_sl:
+    if sl_pct > max_sl:
         return None
-    if sl_atr is not None and (sl_atr < min_atr or sl_atr > max_atr):
+    if sl_atr is not None and sl_atr > max_atr:
         return None
     return round(sl_pct, 2)
 
@@ -1493,7 +1432,6 @@ def compute_min_tp_pct_for_fees(entry, qty, direction):
 def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
                           min_rr, qty=None, lower_mult=0.7, upper_mult=1.5,
                           max_rr=None, verbose=False):
-    # === AJOUT 2026-10-09 : max_rr param pour plafonner le R/R sur setup faible ===
     if atr_tp_pct is None or atr_tp_pct <= 0 or entry <= 0 or sl_price <= 0:
         return None, None
     if not candidates:
@@ -1516,12 +1454,10 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
 
     effective_min_dist_pct = max(min_dist_pct_rr, fee_min_dist_pct)
 
-    # === AJOUT 2026-10-09 : plafond R/R si setup faible ===
     max_dist_pct_rr_cap = None
     if max_rr is not None:
         max_dist_pct_rr_cap = sl_pct * max_rr
 
-    # === AJOUT 2026-10-09 (v2) : bornes effectives + détection disjonction ===
     lower_bound = max(effective_min_dist_pct, ref_lo)
     upper_bound = ref_hi
     if max_dist_pct_rr_cap is not None:
@@ -1553,12 +1489,38 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
 
         valid.append((price, label, dist_pct))
 
+    # v4 — C6 : fallback si fenêtre ATR et plafond R/R disjoints.
+    # On relâche ref_lo (borne basse ATR) car c'est elle qui crée le conflit ;
+    # on conserve min_dist_pct_rr (R/R min) et max_dist_pct_rr_cap (plafond R/R).
+    fallback_used = False
+    if not valid and constraints_disjoint:
+        fallback_used = True
+        for price, label in candidates:
+            if price is None or price <= 0:
+                continue
+            if direction == "LONG":
+                if price <= entry:
+                    continue
+                dist_pct = (price - entry) / entry * 100
+            else:
+                if price >= entry:
+                    continue
+                dist_pct = (entry - price) / entry * 100
+
+            if dist_pct < effective_min_dist_pct:
+                continue
+            if dist_pct > max_dist_pct:
+                continue
+            if max_dist_pct_rr_cap is not None and dist_pct > max_dist_pct_rr_cap:
+                continue
+            # PAS de contrainte ref_lo dans le fallback
+            valid.append((price, label, dist_pct))
+
     if not valid:
         if verbose:
             if constraints_disjoint:
-                # === AJOUT 2026-10-09 (v2) : message dédié ===
                 print(
-                    f"     ❌ Contraintes R/R et fenêtre ATR disjointes — "
+                    f"     ❌ Contraintes R/R et fenêtre ATR disjointes même après fallback — "
                     f"setup structurellement infaisable "
                     f"(plancher effectif {lower_bound:.2f}% > "
                     f"plafond effectif {upper_bound:.2f}% ; "
@@ -1588,6 +1550,12 @@ def compute_structural_tp(entry, sl_price, direction, atr_tp_pct, candidates,
                 )
         return None, None
 
+    if fallback_used and verbose:
+        print(
+            f"     ⚠️ Fenêtre ATR/plafond R/R disjoints — fallback: R/R min conservé, "
+            f"plancher ATR relâché", flush=True
+        )
+
     valid.sort(key=lambda x: abs(x[2] - atr_tp_pct))
     best_price, best_label, best_dist = valid[0]
     return round(best_dist, 2), best_label
@@ -1616,6 +1584,11 @@ def calculate_intraday_rvol_from_hist(hist):
         cutoff = today_bars.index[-1].time()
         today_vol = float(today_bars["Volume"].sum())
 
+        # v4 — C9 : si le volume d'aujourd'hui est 0 ou manquant, on renvoie
+        # None (donnée manquante) au lieu d'un RVOL x0.00 trompeur.
+        if today_vol <= 0:
+            return None
+
         prior_vols = []
         for d in dates[:-1]:
             day_bars = h[h["date"] == d]
@@ -1632,7 +1605,9 @@ def calculate_intraday_rvol_from_hist(hist):
     except Exception:
         return None
 
-def analyze_stock(ticker, regime=None, verbose=True):
+def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
+    if reject_stats is None:
+        reject_stats = {}
     if regime is None:
         regime = _default_regime()
     try:
@@ -1643,6 +1618,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
         if not price or price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             if verbose:
                 print(f"  ❌ Prix hors limites ({price})", flush=True)
+            reject_stats["price_limits"] = reject_stats.get("price_limits", 0) + 1
             return None
         bid = info.get("bid")
         ask = info.get("ask")
@@ -1653,14 +1629,16 @@ def analyze_stock(ticker, regime=None, verbose=True):
             if spread_pct > MAX_SPREAD_PCT:
                 if verbose:
                     print(f"  ❌ Spread {spread_pct:.2f}% > {MAX_SPREAD_PCT}%", flush=True)
+                reject_stats["spread"] = reject_stats.get("spread", 0) + 1
                 return None
         prev_close = info.get("previousClose")
         if not prev_close or prev_close == 0:
+            reject_stats["exception"] = reject_stats.get("exception", 0) + 1
             return None
         gap = ((price - prev_close) / prev_close) * 100
 
-        # v3 : gap_min_long 2.0 → 1.0 (revert au passage réel IBKR)
-        gap_min_long = 1.0 + regime.get("gap_min_long_adj", 0.0)
+        # v4 — C7 : gap_min_long 1.0 → 0.5, gap_min_short -1.5 → -1.0
+        gap_min_long = 0.5 + regime.get("gap_min_long_adj", 0.0)
         gap_max_short = SHORT_GAP_MIN - regime.get("gap_min_short_adj", 0.0)
 
         score = 0
@@ -1673,32 +1651,41 @@ def analyze_stock(ticker, regime=None, verbose=True):
         else:
             if verbose:
                 print(f"  ❌ Gap {gap:.2f}% hors plage (régime: {regime.get('regime')})", flush=True)
+            reject_stats["gap"] = reject_stats.get("gap", 0) + 1
             return None
 
         if direction == "LONG" and not DIRECTION_CONTROL.get("enable_longs", True):
             if verbose:
                 print("  ❌ LONG désactivé via direction_control", flush=True)
+            reject_stats["direction"] = reject_stats.get("direction", 0) + 1
             return None
         if direction == "SHORT" and not DIRECTION_CONTROL.get("enable_shorts", True):
             if verbose:
                 print("  ❌ SHORT désactivé via direction_control", flush=True)
+            reject_stats["direction"] = reject_stats.get("direction", 0) + 1
             return None
         if direction == "SHORT" and price > SHORT_PRICE_MAX_STOCK:
             if verbose:
                 print(f"  ❌ SHORT: prix {price:.2f}$ > {SHORT_PRICE_MAX_STOCK:.0f}$ (limite absolue)", flush=True)
+            reject_stats["price_limits"] = reject_stats.get("price_limits", 0) + 1
             return None
 
         volume = info.get("volume", 0)
         avg_vol = info.get("averageVolume", volume)
         vol_ratio = volume / avg_vol if avg_vol > 0 else 1
 
-        vol_threshold = SHORT_VOL_MIN if direction == "SHORT" else 0.8
+        # v4 — C1 : ne rejette plus les LONGs sur vol_ratio. Seul le SHORT
+        # a un plancher de liquidité strict (C2 : 0.3).
+        vol_threshold = SHORT_VOL_MIN if direction == "SHORT" else 0.0
         if vol_ratio > vol_threshold:
             score += 1
         else:
-            if verbose and direction == "SHORT":
-                print(f"  ❌ SHORT: vol_ratio {vol_ratio:.2f} < {SHORT_VOL_MIN}", flush=True)
-            return None if direction == "SHORT" else None
+            if direction == "SHORT":
+                if verbose:
+                    print(f"  ❌ SHORT: vol_ratio {vol_ratio:.2f} < {SHORT_VOL_MIN}", flush=True)
+                reject_stats["vol_ratio"] = reject_stats.get("vol_ratio", 0) + 1
+                return None
+            # LONG avec vol_ratio faible : on continue, pas de point bonus.
 
         float_shares = info.get("floatShares")
         if float_shares is not None and float_shares < 100_000_000:
@@ -1740,11 +1727,17 @@ def analyze_stock(ticker, regime=None, verbose=True):
         rvol = calculate_intraday_rvol_from_hist(structure_hist) \
                if INTRADAY_FILTERS.get("rvol_enabled", True) else None
 
+        # v4 — C9 : RVOL x0.00 = donnée manquante, pas un signal
+        if rvol is not None and rvol <= 0.01:
+            rvol = None
+
         now_min = datetime.now(MONTREAL_TZ).hour * 60 + datetime.now(MONTREAL_TZ).minute
-        if rvol is not None and now_min >= INTRADAY_FILTERS.get("rvol_apply_reject_after_min", 585):
+        # v4 — C10 : rejet RVOL appliqué seulement après 11:00
+        if rvol is not None and now_min >= INTRADAY_FILTERS.get("rvol_apply_reject_after_min", 660):
             if rvol < INTRADAY_FILTERS.get("rvol_reject_below", 0.5):
                 if verbose:
                     print(f"  ❌ RVOL intraday x{rvol:.2f} trop faible — rejet", flush=True)
+                reject_stats["rvol"] = reject_stats.get("rvol", 0) + 1
                 return None
 
         if verbose:
@@ -1754,9 +1747,10 @@ def analyze_stock(ticker, regime=None, verbose=True):
         timing_pen = get_timing_penalty()
         effective_score_min = min(7, SCORE_MIN_STOCKS + regime.get("score_min_stock_adj", 0) + timing_pen)
         if score < effective_score_min:
+            reject_stats["score"] = reject_stats.get("score", 0) + 1
             return None
 
-        inst_score, _ = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+        inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
         if verbose:
             print(f"     🏛️ Inst. Interest: {inst_score}/10", flush=True)
 
@@ -1769,7 +1763,8 @@ def analyze_stock(ticker, regime=None, verbose=True):
         cap_category = get_market_cap_category(ticker)
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, cap_category)
-        held_pct = info.get("heldPercentInstitutions", 0.5) or 0.5
+        held_missing = inst_details.get("held_missing", False)
+        held_pct = 0.5 if held_missing else inst_details.get("held", 0.5)
 
         daily_ctx = get_daily_context(ticker, verbose=verbose)
         atr_pct = daily_ctx.get("atr_pct") if daily_ctx else None
@@ -1781,14 +1776,18 @@ def analyze_stock(ticker, regime=None, verbose=True):
                 print(f"     ⚠️ ATR indisponible — référence de distance via gap/score", flush=True)
 
         structure = detect_setup_structure(structure_hist, price, direction, gap, vwap, poc)
-        structural_sl = calculate_structural_sl(price, direction, structure)
+        # v4 — C4 : sl_mult_adj du régime appliqué sur le buffer
+        structural_sl = calculate_structural_sl(
+            price, direction, structure, regime_sl_mult=regime.get("sl_mult_adj", 1.0)
+        )
         if structural_sl is None:
             if verbose:
                 print("     ❌ SL structurel indisponible/invalide", flush=True)
+            reject_stats["sl"] = reject_stats.get("sl", 0) + 1
             return None
 
-        tp_ref_adj, _, trail_adj = adjust_risk_with_factors(
-            tp_ref, structural_sl["sl_pct"], spread_pct, vol_ratio, cap_category, gap, held_pct
+        tp_ref_adj, trail_adj = adjust_risk_with_factors(
+            tp_ref, spread_pct, vol_ratio, cap_category, gap, held_pct
         )
         if direction == "SHORT":
             trail_adj += SHORT_TRAIL_WIDENING
@@ -1797,16 +1796,29 @@ def analyze_stock(ticker, regime=None, verbose=True):
         if sl_final is None:
             if verbose:
                 print(
-                    f"     ❌ SL structurel hors bornes : {structural_sl['sl_pct']:.2f}% "
+                    f"     ❌ SL structurel hors bornes MAX : {structural_sl['sl_pct']:.2f}% "
                     f"({structural_sl.get('sl_atr', 0):.2f} ATR)", flush=True
                 )
+            reject_stats["sl"] = reject_stats.get("sl", 0) + 1
             return None
 
-        # === AJOUT 2026-10-09 : calibration contextuelle du TP ===
-        # Calcul de la conviction préliminaire (synthetic_l2 pas encore évalué).
+        if verbose and structural_sl.get("widened"):
+            print(
+                f"     📏 SL élargi au minimum (buffer → {structural_sl['sl_pct']:.2f}%)",
+                flush=True
+            )
+
+        # v4 — C8 : L2 calculé AVANT calibration TP
+        l2_result = calculate_synthetic_l2(
+            ticker=ticker, direction=direction, current_price=price,
+            spread_pct=spread_pct, vwap=vwap, poc=poc, verbose=False
+        )
+        l2_score = l2_result["score"]
+        l2_label = l2_result["label"]
+
         conv_label_prelim, _ = calculate_conviction(
             direction, gap, vol_ratio, vwap, price, inst_score,
-            regime.get("bias", "⚪ Neutral"), poc, 50.0
+            regime.get("bias", "⚪ Neutral"), poc, l2_score
         )
         tp_ref_adj, tp_calib_trace = apply_tp_calibration(
             tp_ref_adj,
@@ -1814,7 +1826,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
             regime_name=regime.get("regime", "Unknown"),
             conviction_label=conv_label_prelim,
             inst_interest=inst_score,
-            atr_pct=atr_pct,   # === v2 : ATR du titre pour cap relatif ===
+            atr_pct=atr_pct,
             verbose=verbose,
         )
         weak_max_rr = get_weak_setup_max_rr(conv_label_prelim, inst_score)
@@ -1845,26 +1857,27 @@ def analyze_stock(ticker, regime=None, verbose=True):
             candidates=tp_candidates,
             min_rr=min_rr,
             qty=qty_for_fees,
-            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.55),
-            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.70),
-            max_rr=weak_max_rr,   # === AJOUT 2026-10-09 ===
+            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.40),
+            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.80),
+            max_rr=weak_max_rr,
             verbose=verbose,
         )
         if tp_final is None:
             if verbose:
                 print("     ❌ Setup rejeté : aucun TP structurel valide", flush=True)
+            reject_stats["tp"] = reject_stats.get("tp", 0) + 1
             return None
 
-        if tp_final <= 0 or sl_final <= 0 or tp_final / sl_final < min_rr:
+        # v4 — C5 : tolérance 1e-6 sur comparaison R/R
+        if tp_final <= 0 or sl_final <= 0 or (tp_final / sl_final) < (min_rr - 1e-6):
             if verbose:
                 print(
                     f"     ❌ R/R final {tp_final/sl_final:.2f}:1 < min {min_rr:.1f}:1",
                     flush=True
                 )
+            reject_stats["rr_min"] = reject_stats.get("rr_min", 0) + 1
             return None
 
-        # === AJOUT 2026-10-09 : garde-fou final cohérence ===
-        # Si setup faible (conv Low ET inst<=3) et TP > 1.5×ATR → rejet.
         if conv_label_prelim == "Low" and inst_score <= 3:
             atr_hard_cap = (atr_pct * TP_CALIBRATION.get("atr_hard_cap_mult", 1.5)) if atr_pct else 6.0
             if tp_final > atr_hard_cap:
@@ -1874,6 +1887,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
                         f"{atr_hard_cap:.2f}% (conv Low, inst {inst_score}) → rejet",
                         flush=True
                     )
+                reject_stats["atr_cap"] = reject_stats.get("atr_cap", 0) + 1
                 return None
 
         fee_min_pct = compute_min_tp_pct_for_fees(price, qty_for_fees, direction)
@@ -1883,6 +1897,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
                     f"     ❌ TP ({tp_final:.2f}%) < couverture frais IBKR ({fee_min_pct:.3f}%)",
                     flush=True
                 )
+            reject_stats["fees"] = reject_stats.get("fees", 0) + 1
             return None
 
         if direction == "LONG":
@@ -1911,7 +1926,7 @@ def analyze_stock(ticker, regime=None, verbose=True):
             "trail_pct": round(trail, 2), "tp_pct": round(tp_final, 2),
             "sl_pct": round(sl_final, 2), "inst_interest": inst_score,
             "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
-            "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated",
+            "synthetic_l2_score": l2_score, "synthetic_l2_label": l2_label,
             "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
             "rvol_intraday": round(rvol, 2) if rvol is not None else None,
             "min_rr_regime": min_rr,
@@ -1921,17 +1936,21 @@ def analyze_stock(ticker, regime=None, verbose=True):
             "structure_level": (structure or {}).get("structure_level"),
             "invalidation_level": (structure or {}).get("invalidation_level"),
             "sl_atr": round(structural_sl.get("sl_atr"), 2) if structural_sl else None,
-            # === AJOUT 2026-10-09 : traçabilité calibration TP ===
+            "sl_widened": structural_sl.get("widened", False),
             "tp_calibration": tp_calib_trace,
             "conviction_prelim": conv_label_prelim,
             "weak_setup_max_rr": weak_max_rr,
+            "held_missing": held_missing,
         }
     except Exception as e:
         if verbose:
             print(f"  ⚠️ Ticker indisponible: {e}", flush=True)
+        reject_stats["exception"] = reject_stats.get("exception", 0) + 1
         return None
 
-def analyze_etf(ticker, regime=None):
+def analyze_etf(ticker, regime=None, reject_stats=None):
+    if reject_stats is None:
+        reject_stats = {}
     if regime is None:
         regime = _default_regime()
     try:
@@ -1944,9 +1963,10 @@ def analyze_etf(ticker, regime=None):
             if not hist.empty and len(hist) > 0:
                 price = hist["Close"].iloc[-1]
             else:
+                reject_stats["exception"] = reject_stats.get("exception", 0) + 1
                 return None
-        # v3 : utilise PRICE_MIN_ETFS (10.00) au lieu de PRICE_MIN_STOCKS
         if price < PRICE_MIN_ETFS or price > PRICE_MAX_ETFS:
+            reject_stats["price_limits"] = reject_stats.get("price_limits", 0) + 1
             return None
         bid = info.get("bid")
         ask = info.get("ask")
@@ -1955,13 +1975,16 @@ def analyze_etf(ticker, regime=None):
             mid = (bid + ask) / 2
             spread_pct = ((ask - bid) / mid) * 100
             if spread_pct > MAX_SPREAD_PCT:
+                reject_stats["spread"] = reject_stats.get("spread", 0) + 1
                 return None
         if hist.empty or len(hist) < 2:
+            reject_stats["exception"] = reject_stats.get("exception", 0) + 1
             return None
         closes = hist["Close"]
         volumes = hist["Volume"]
         prev_close = closes.iloc[-2]
         if not prev_close:
+            reject_stats["exception"] = reject_stats.get("exception", 0) + 1
             return None
         gap = ((price - prev_close) / prev_close) * 100
         volume = info.get("volume", 0)
@@ -1980,19 +2003,23 @@ def analyze_etf(ticker, regime=None):
             direction = "SHORT"
             score += 1
         else:
+            reject_stats["gap"] = reject_stats.get("gap", 0) + 1
             return None
 
         if direction == "LONG" and not DIRECTION_CONTROL.get("enable_longs", True):
             print(f"  ❌ ETF {ticker}: LONG désactivé via direction_control", flush=True)
+            reject_stats["direction"] = reject_stats.get("direction", 0) + 1
             return None
         if direction == "SHORT" and not DIRECTION_CONTROL.get("enable_shorts", True):
             print(f"  ❌ ETF {ticker}: SHORT désactivé via direction_control", flush=True)
+            reject_stats["direction"] = reject_stats.get("direction", 0) + 1
             return None
         if direction == "SHORT" and price > SHORT_PRICE_MAX_ETF:
-            print(f"  ❌ ETF {ticker}: SHORT prix {price:.2f}$ > {SHORT_PRICE_MAX_ETF:.0f}$ (limite absolue)", flush=True)
+            print(f"  ❌ ETF {ticker}: SHORT prix {price:.2f}$ > {SHORT_PRICE_MAX_ETF:.0f}$", flush=True)
+            reject_stats["price_limits"] = reject_stats.get("price_limits", 0) + 1
             return None
 
-        if vol_ratio > 0.9:
+        if vol_ratio > 0.3:
             score += 1
         if aum > 50_000_000 or aum == 0:
             score += 1
@@ -2012,20 +2039,27 @@ def analyze_etf(ticker, regime=None):
         rvol = calculate_intraday_rvol_from_hist(structure_hist) \
                if INTRADAY_FILTERS.get("rvol_enabled", True) else None
 
+        # v4 — C9 : RVOL x0.00 = donnée manquante
+        if rvol is not None and rvol <= 0.01:
+            rvol = None
+
         now_min = datetime.now(MONTREAL_TZ).hour * 60 + datetime.now(MONTREAL_TZ).minute
-        if rvol is not None and now_min >= INTRADAY_FILTERS.get("rvol_apply_reject_after_min", 585):
+        # v4 — C10 : rejet RVOL après 11:00
+        if rvol is not None and now_min >= INTRADAY_FILTERS.get("rvol_apply_reject_after_min", 660):
             if rvol < INTRADAY_FILTERS.get("rvol_reject_below", 0.5):
                 print(f"  ❌ ETF {ticker}: RVOL intraday x{rvol:.2f} trop faible", flush=True)
+                reject_stats["rvol"] = reject_stats.get("rvol", 0) + 1
                 return None
 
         timing_pen = get_timing_penalty()
         effective_score_min = min(5, SCORE_MIN_ETFS + regime.get("score_min_etf_adj", 0) + timing_pen)
         if score < effective_score_min:
+            reject_stats["score"] = reject_stats.get("score", 0) + 1
             return None
 
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
-        inst_score, _ = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+        inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
         vwap, poc = get_vwap_poc(ticker, price, direction)
         if vwap is not None:
             vwap = round(vwap, 2)
@@ -2053,14 +2087,19 @@ def analyze_etf(ticker, regime=None):
             tp_ref *= regime.get("tp_mult_adj", 1.0)
 
         structure = detect_setup_structure(structure_hist, price, direction, gap, vwap, poc)
-        structural_sl = calculate_structural_sl(price, direction, structure)
+        # v4 — C4 : sl_mult_adj appliqué
+        structural_sl = calculate_structural_sl(
+            price, direction, structure, regime_sl_mult=regime.get("sl_mult_adj", 1.0)
+        )
         if structural_sl is None:
             print(f"  ❌ ETF {ticker}: SL structurel indisponible/invalide", flush=True)
+            reject_stats["sl"] = reject_stats.get("sl", 0) + 1
             return None
 
-        held_pct = info.get("heldPercentInstitutions", 0.5) or 0.5
-        tp_ref_adj, _, trail_adj = adjust_risk_with_factors(
-            tp_ref, structural_sl["sl_pct"], spread_pct, vol_ratio, "Large Cap", gap, held_pct
+        held_missing = inst_details.get("held_missing", False)
+        held_pct = 0.5 if held_missing else inst_details.get("held", 0.5)
+        tp_ref_adj, trail_adj = adjust_risk_with_factors(
+            tp_ref, spread_pct, vol_ratio, "Large Cap", gap, held_pct
         )
         if direction == "SHORT":
             trail_adj += SHORT_TRAIL_WIDENING
@@ -2068,15 +2107,23 @@ def analyze_etf(ticker, regime=None):
         sl_final = validate_sl_bounds_only(structural_sl)
         if sl_final is None:
             print(
-                f"  ❌ ETF {ticker}: SL structurel hors bornes "
+                f"  ❌ ETF {ticker}: SL structurel hors bornes MAX "
                 f"{structural_sl['sl_pct']:.2f}% ({structural_sl.get('sl_atr', 0):.2f} ATR)", flush=True
             )
+            reject_stats["sl"] = reject_stats.get("sl", 0) + 1
             return None
 
-        # === AJOUT 2026-10-09 : calibration contextuelle du TP (ETF) ===
+        # v4 — C8 : L2 calculé AVANT calibration TP
+        l2_result = calculate_synthetic_l2(
+            ticker=ticker, direction=direction, current_price=price,
+            spread_pct=spread_pct, vwap=vwap, poc=poc, verbose=False
+        )
+        l2_score = l2_result["score"]
+        l2_label = l2_result["label"]
+
         conv_label_prelim, _ = calculate_conviction(
             direction, gap, vol_ratio, vwap, price, inst_score,
-            regime.get("bias", "⚪ Neutral"), poc, 50.0
+            regime.get("bias", "⚪ Neutral"), poc, l2_score
         )
         tp_ref_adj, tp_calib_trace = apply_tp_calibration(
             tp_ref_adj,
@@ -2084,7 +2131,7 @@ def analyze_etf(ticker, regime=None):
             regime_name=regime.get("regime", "Unknown"),
             conviction_label=conv_label_prelim,
             inst_interest=inst_score,
-            atr_pct=atr_pct,   # === v2 : ATR du titre pour cap relatif ===
+            atr_pct=atr_pct,
             verbose=False,
         )
         weak_max_rr = get_weak_setup_max_rr(conv_label_prelim, inst_score)
@@ -2113,23 +2160,25 @@ def analyze_etf(ticker, regime=None):
             candidates=tp_candidates,
             min_rr=min_rr,
             qty=qty_for_fees,
-            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.55),
-            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.70),
-            max_rr=weak_max_rr,   # === AJOUT 2026-10-09 ===
+            lower_mult=INTRADAY_FILTERS.get("structural_tp_atr_lower_mult", 0.40),
+            upper_mult=INTRADAY_FILTERS.get("structural_tp_atr_upper_mult", 1.80),
+            max_rr=weak_max_rr,
             verbose=False,
         )
         if tp_final is None:
             print(f"  ❌ ETF {ticker}: aucun TP structurel valide (R/R ou frais IBKR)", flush=True)
+            reject_stats["tp"] = reject_stats.get("tp", 0) + 1
             return None
 
-        if tp_final <= 0 or sl_final <= 0 or tp_final / sl_final < min_rr:
+        # v4 — C5 : tolérance 1e-6
+        if tp_final <= 0 or sl_final <= 0 or (tp_final / sl_final) < (min_rr - 1e-6):
             print(
                 f"  ❌ ETF {ticker}: R/R final {tp_final/sl_final:.2f}:1 < min {min_rr:.1f}:1",
                 flush=True
             )
+            reject_stats["rr_min"] = reject_stats.get("rr_min", 0) + 1
             return None
 
-        # === AJOUT 2026-10-09 : garde-fou final cohérence (ETF) ===
         if conv_label_prelim == "Low" and inst_score <= 3:
             atr_hard_cap = (atr_pct * TP_CALIBRATION.get("atr_hard_cap_mult", 1.5)) if atr_pct else 6.0
             if tp_final > atr_hard_cap:
@@ -2137,6 +2186,7 @@ def analyze_etf(ticker, regime=None):
                     f"  ❌ ETF {ticker}: garde-fou cohérence TP {tp_final:.2f}% > cap ATR "
                     f"{atr_hard_cap:.2f}% (conv Low, inst {inst_score})", flush=True
                 )
+                reject_stats["atr_cap"] = reject_stats.get("atr_cap", 0) + 1
                 return None
 
         fee_min_pct = compute_min_tp_pct_for_fees(price, qty_for_fees, direction)
@@ -2145,6 +2195,7 @@ def analyze_etf(ticker, regime=None):
                 f"  ❌ ETF {ticker}: TP ({tp_final:.2f}%) < couverture frais IBKR ({fee_min_pct:.3f}%)",
                 flush=True
             )
+            reject_stats["fees"] = reject_stats.get("fees", 0) + 1
             return None
 
         if direction == "LONG":
@@ -2169,43 +2220,21 @@ def analyze_etf(ticker, regime=None):
             "fee_min_pct": fee_min_pct,
             "tp_source": tp_source_label,
             "short_ratio": short_ratio, "vwap": vwap, "poc": poc,
-            "synthetic_l2_score": 50.0, "synthetic_l2_label": "Not evaluated",
+            "synthetic_l2_score": l2_score, "synthetic_l2_label": l2_label,
             "setup_type": (structure or {}).get("setup_type", "N/A"),
             "structure_level": (structure or {}).get("structure_level"),
             "invalidation_level": (structure or {}).get("invalidation_level"),
             "sl_atr": round(structural_sl.get("sl_atr"), 2) if structural_sl else None,
-            # === AJOUT 2026-10-09 : traçabilité calibration TP ===
+            "sl_widened": structural_sl.get("widened", False),
             "tp_calibration": tp_calib_trace,
             "conviction_prelim": conv_label_prelim,
             "weak_setup_max_rr": weak_max_rr,
+            "held_missing": held_missing,
         }
     except Exception as e:
         print(f"  ⚠️ ETF indisponible ({ticker}): {e}", flush=True)
+        reject_stats["exception"] = reject_stats.get("exception", 0) + 1
         return None
-
-def enrich_with_synthetic_l2(results, is_etf=False):
-    if not results:
-        return results
-    max_candidates = SYNTHETIC_L2_CONFIG["max_candidates_etfs"] if is_etf else SYNTHETIC_L2_CONFIG["max_candidates_stocks"]
-    candidates = sorted(
-        results,
-        key=lambda x: (x["score"], x["vol_ratio"], abs(x["gap"])),
-        reverse=True
-    )[:max_candidates]
-    candidate_symbols = {x["ticker"] for x in candidates}
-    for data in results:
-        if data["ticker"] not in candidate_symbols:
-            data["synthetic_l2_score"] = 50.0
-            data["synthetic_l2_label"] = "Not evaluated"
-            continue
-        l2 = calculate_synthetic_l2(
-            ticker=data["ticker"], direction=data["direction"],
-            current_price=data["price"], spread_pct=data["spread_pct"],
-            vwap=data.get("vwap"), poc=data.get("poc"), verbose=True
-        )
-        data["synthetic_l2_score"] = l2["score"]
-        data["synthetic_l2_label"] = l2["label"]
-    return results
 
 def calculate_quantity(entry, stop, capital, risk_pct, max_cap_pct):
     risk_amount = capital * risk_pct
@@ -2332,15 +2361,26 @@ def wait_until_target(target_hour, target_minute):
             print(f"💤 ... encore {remaining/60:.1f} min avant {target.strftime('%H:%M')}", flush=True)
             last_heartbeat = now
 
+def _reset_reject_stats():
+    return {
+        "price_limits": 0, "spread": 0, "gap": 0, "vol_ratio": 0,
+        "rvol": 0, "score": 0, "sl": 0, "tp": 0, "rr_min": 0,
+        "fees": 0, "atr_cap": 0, "direction": 0, "exception": 0,
+    }
+
+def _print_reject_stats(stats, label):
+    non_zero = {k: v for k, v in stats.items() if v > 0}
+    if not non_zero:
+        return
+    detail = " ".join(f"{k}={v}" for k, v in non_zero.items())
+    print(f"  📊 Rejets {label}: {detail}", flush=True)
+
 def main():
     now = datetime.now(MONTREAL_TZ)
     heure = now.hour
     minute = now.minute
 
     if is_ca_market_closed(now):
-        # === SILENCE MESSAGE JOUR FERMÉ (2026-10-12) ===
-        # Aucun message Telegram n'est envoyé, que le script soit lancé
-        # manuellement ou via un job programmé. Seul un log console est émis.
         print("🏖️ Marché CA fermé – Arrêt.", flush=True)
         return
 
@@ -2420,34 +2460,33 @@ def main():
             regime = detect_market_regime(verbose=True)
             market_bias = regime["bias"]
 
+            stocks_reject = _reset_reject_stats()
             stocks_results = []
             for ticker in STOCK_TICKERS:
                 print(f"  - {ticker}:", flush=True)
-                data = analyze_stock(ticker, regime=regime, verbose=True)
+                data = analyze_stock(ticker, regime=regime, verbose=True, reject_stats=stocks_reject)
                 if data:
                     stocks_results.append(data)
-                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')}", flush=True)
+                    l2_display = f"L2:{data.get('synthetic_l2_score', 50):.0f}"
+                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')} | {l2_display}", flush=True)
                 else:
                     print("    ❌", flush=True)
+            _print_reject_stats(stocks_reject, "STOCKS")
 
+            etfs_reject = _reset_reject_stats()
             etfs_results = []
             for ticker in ETF_TICKERS:
                 print(f"  - {ticker}...", end=" ", flush=True)
-                data = analyze_etf(ticker, regime=regime)
+                data = analyze_etf(ticker, regime=regime, reject_stats=etfs_reject)
                 if data:
                     etfs_results.append(data)
-                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')}", flush=True)
+                    l2_display = f"L2:{data.get('synthetic_l2_score', 50):.0f}"
+                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')} | {l2_display}", flush=True)
                 else:
                     print("❌", flush=True)
+            _print_reject_stats(etfs_reject, "ETFS")
 
-            print("\n🧠 ================================", flush=True)
-            print("🧠 SYNTHETIC L2 — STOCKS", flush=True)
-            print("🧠 ================================", flush=True)
-            stocks_results = enrich_with_synthetic_l2(stocks_results, is_etf=False)
-            print("\n🧠 ================================", flush=True)
-            print("🧠 SYNTHETIC L2 — ETFs", flush=True)
-            print("🧠 ================================", flush=True)
-            etfs_results = enrich_with_synthetic_l2(etfs_results, is_etf=True)
+            print(f"🧠 SYNTHETIC L2 déjà intégré au pipeline (calculé pré-calibration TP).", flush=True)
 
             stock_long = [s for s in stocks_results if s["direction"] == "LONG"]
             stock_short = [s for s in stocks_results if s["direction"] == "SHORT"]
