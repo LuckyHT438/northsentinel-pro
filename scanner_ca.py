@@ -39,10 +39,7 @@
 #       1:2, la probabilité qu'un titre satisfasse la borne SHORT était
 #       mécaniquement deux fois plus faible que pour la borne LONG.
 #   F3. Sélection finale : best LONG + best SHORT indépendants
-#       Motif : la logique "pair/fallback" avec priority_threshold=12
-#       ne firait jamais, retombait systématiquement sur
-#       "top absolu" → 100% LONG sur journée verte. v4.1 expose les
-#       deux directions quand elles existent (jusqu'à 2 setups / scan).
+#       (remplacé en v4.2/v4.3, voir F4 et F5)
 #
 # >>> v4.2 — RÈGLE DIVERSITÉ DE TYPE 2026-11-04 <<<
 #   F4. Sélection finale stricte top-down :
@@ -50,12 +47,21 @@
 #       - Si top 2 = (1 stock + 1 ETF) ET (LONG + SHORT) → envoyer les 2
 #       - Sinon (même type OU même direction) → envoyer UNIQUEMENT top 1
 #       Corrige la régression du 04/11 (ZUB.TO ETF LONG + ZEO.TO ETF
-#       SHORT = 2 same-type). Couvre explicitement :
-#         * 2 same-type + same-direction     → 1 (top 1)
-#         * 2 different-type + same-direction → 1 (top 1)
-#         * 2 same-type + opposite-direction  → 1 (top 1)
-#         * 2 different-type + opposite-direction → 2 (seul cas valide)
-#       Remplace l'appel à _select_best_per_direction dans main().
+#       SHORT = 2 same-type). Remplace l'appel à _select_best_per_direction
+#       dans main().
+#
+# >>> v4.3 — RÈGLE DIVERSITÉ DE TYPE DÉFINITIVE 2026-11-04 <<<
+#   F5. _select_top_candidates_with_diversity_rules() est appelée dans
+#       main() à la place de _select_best_per_direction().
+#       Comportement :
+#         - 2 same-type + same-direction          → 1 setup
+#         - 2 same-type + opposite-direction      → 1 setup (interdit)
+#         - 2 different-type + same-direction     → 1 setup
+#         - 2 different-type + opposite-direction → 2 setups (seul cas)
+#       Les logs de refus indiquent désormais la raison exacte
+#       (même type ET même direction / même type / même direction).
+#       _select_best_per_direction est conservée (legacy) mais
+#       n'est plus appelée.
 # ============================================================
 
 import requests
@@ -2403,22 +2409,16 @@ def _select_best_per_direction(stocks_results, etfs_results, market_bias):
     return selected_items
 
 def _select_top_candidates_with_diversity_rules(stocks_results, etfs_results, market_bias):
-    """v4.2 — F4 : sélection top-down stricte avec règle de diversité.
+    """v4.3 — Sélection top-down stricte avec règles de diversité définitives.
 
-    Règle :
-      1. Scorer tous les candidats (stocks + ETFs confondus) par priority_score.
-      2. Prendre top 1 (le meilleur absolu) et top 2.
-      3. Si top 2 réunit les DEUX conditions :
-           - types différents (1 stock + 1 ETF)
-           - directions opposées (LONG + SHORT)
-         → envoyer les 2 setups.
-      4. Sinon (même type OU même direction) → envoyer UNIQUEMENT top 1.
-
-    Cas couverts :
-      - 2 same-type + same-direction        → 1 setup (top 1)
-      - 2 different-type + same-direction   → 1 setup (top 1)
-      - 2 same-type + opposite-direction    → 1 setup (top 1)
-      - 2 different-type + opposite-direction → 2 setups (seul cas valide)
+    Règles absolues :
+      - JAMAIS 2 setups de même TYPE (2 stocks ou 2 ETFs), quelles que
+        soient leurs directions.
+      - JAMAIS 2 setups de même DIRECTION (2 LONGs ou 2 SHORTs), quels
+        que soient leurs types.
+      - Le SEUL cas où 2 setups sont envoyés :
+          1 stock + 1 ETF ET directions opposées (LONG + SHORT).
+      - Dans TOUS les autres cas : envoyer uniquement le TOP 1.
     """
     scored = []
     for c in stocks_results:
@@ -2449,14 +2449,17 @@ def _select_top_candidates_with_diversity_rules(stocks_results, etfs_results, ma
         )
         return [(best, best_is_etf), (second, second_is_etf)]
 
-    reasons = []
-    if not type_ok:
-        reasons.append("même type")
-    if not direction_ok:
-        reasons.append("même direction")
+    if not type_ok and not direction_ok:
+        reason = "même type ET même direction"
+    elif not type_ok:
+        reason = "même type (2 stocks ou 2 ETFs) — interdit même si directions opposées"
+    else:
+        reason = "même direction (2 LONGs ou 2 SHORTs)"
+
     print(
-        f"     🔀 Top 2 refusé ({' + '.join(reasons)}) → single setup : "
-        f"{best['ticker']} {best['direction']} ({best_ps:.1f}) [2e: {second['ticker']} {second['direction']} ({second_ps:.1f})]",
+        f"     🔀 Top 2 refusé ({reason}) → single setup : "
+        f"{best['ticker']} {best['direction']} ({best_ps:.1f}) "
+        f"[2e écarté : {second['ticker']} {second['direction']} ({second_ps:.1f})]",
         flush=True
     )
     return [(best, best_is_etf)]
@@ -2574,7 +2577,7 @@ def main():
 
             print(f"🧠 SYNTHETIC L2 déjà intégré au pipeline (calculé pré-calibration TP).", flush=True)
 
-            # v4.2 — F4 : sélection top-down stricte avec règle de diversité
+            # v4.3 — F5 : sélection top-down stricte avec règles de diversité
             selected_items = _select_top_candidates_with_diversity_rules(
                 stocks_results, etfs_results, market_bias
             )
