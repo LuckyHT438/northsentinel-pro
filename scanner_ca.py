@@ -43,8 +43,19 @@
 #       ne firait jamais, retombait systématiquement sur
 #       "top absolu" → 100% LONG sur journée verte. v4.1 expose les
 #       deux directions quand elles existent (jusqu'à 2 setups / scan).
-#       Aucun plancher de priorité appliqué : si c'est valide, c'est
-#       montré. Bruit éventuel → traité en v4.2 après debrief.
+#
+# >>> v4.2 — RÈGLE DIVERSITÉ DE TYPE 2026-11-04 <<<
+#   F4. Sélection finale stricte top-down :
+#       - Scorer top 1 + top 2 (stocks + ETFs confondus par priority_score)
+#       - Si top 2 = (1 stock + 1 ETF) ET (LONG + SHORT) → envoyer les 2
+#       - Sinon (même type OU même direction) → envoyer UNIQUEMENT top 1
+#       Corrige la régression du 04/11 (ZUB.TO ETF LONG + ZEO.TO ETF
+#       SHORT = 2 same-type). Couvre explicitement :
+#         * 2 same-type + same-direction     → 1 (top 1)
+#         * 2 different-type + same-direction → 1 (top 1)
+#         * 2 same-type + opposite-direction  → 1 (top 1)
+#         * 2 different-type + opposite-direction → 2 (seul cas valide)
+#       Remplace l'appel à _select_best_per_direction dans main().
 # ============================================================
 
 import requests
@@ -2359,8 +2370,9 @@ def _print_reject_stats(stats, label):
     print(f"  📊 Rejets {label}: {detail}", flush=True)
 
 def _select_best_per_direction(stocks_results, etfs_results, market_bias):
-    """v4.1 — F3 : sélectionne indépendamment le meilleur LONG et le meilleur SHORT,
-    stocks et ETFs confondus. Remplace la logique pair/fallback de v4."""
+    """v4.1 — F3 (legacy, non utilisée depuis v4.2).
+    Conservée pour référence : remplacée dans main() par
+    _select_top_candidates_with_diversity_rules."""
     best_long = None
     best_long_is_etf = False
     best_long_ps = float("-inf")
@@ -2389,6 +2401,65 @@ def _select_best_per_direction(stocks_results, etfs_results, market_bias):
     if best_short is not None:
         selected_items.append((best_short, best_short_is_etf))
     return selected_items
+
+def _select_top_candidates_with_diversity_rules(stocks_results, etfs_results, market_bias):
+    """v4.2 — F4 : sélection top-down stricte avec règle de diversité.
+
+    Règle :
+      1. Scorer tous les candidats (stocks + ETFs confondus) par priority_score.
+      2. Prendre top 1 (le meilleur absolu) et top 2.
+      3. Si top 2 réunit les DEUX conditions :
+           - types différents (1 stock + 1 ETF)
+           - directions opposées (LONG + SHORT)
+         → envoyer les 2 setups.
+      4. Sinon (même type OU même direction) → envoyer UNIQUEMENT top 1.
+
+    Cas couverts :
+      - 2 same-type + same-direction        → 1 setup (top 1)
+      - 2 different-type + same-direction   → 1 setup (top 1)
+      - 2 same-type + opposite-direction    → 1 setup (top 1)
+      - 2 different-type + opposite-direction → 2 setups (seul cas valide)
+    """
+    scored = []
+    for c in stocks_results:
+        scored.append((calculate_priority_score(c, market_bias, False), c, False))
+    for c in etfs_results:
+        scored.append((calculate_priority_score(c, market_bias, True), c, True))
+
+    if not scored:
+        return []
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best_ps, best, best_is_etf = scored[0]
+
+    if len(scored) == 1:
+        print(f"     🎯 1 seul candidat → single setup : {best['ticker']} {best['direction']}", flush=True)
+        return [(best, best_is_etf)]
+
+    second_ps, second, second_is_etf = scored[1]
+    type_ok = (best_is_etf != second_is_etf)
+    direction_ok = (best["direction"] != second["direction"])
+
+    if type_ok and direction_ok:
+        print(
+            f"     🔀 Top 2 retenus (1 stock + 1 ETF, directions opposées) : "
+            f"{best['ticker']} {best['direction']} ({best_ps:.1f}) + "
+            f"{second['ticker']} {second['direction']} ({second_ps:.1f})",
+            flush=True
+        )
+        return [(best, best_is_etf), (second, second_is_etf)]
+
+    reasons = []
+    if not type_ok:
+        reasons.append("même type")
+    if not direction_ok:
+        reasons.append("même direction")
+    print(
+        f"     🔀 Top 2 refusé ({' + '.join(reasons)}) → single setup : "
+        f"{best['ticker']} {best['direction']} ({best_ps:.1f}) [2e: {second['ticker']} {second['direction']} ({second_ps:.1f})]",
+        flush=True
+    )
+    return [(best, best_is_etf)]
 
 def main():
     now = datetime.now(MONTREAL_TZ)
@@ -2503,8 +2574,10 @@ def main():
 
             print(f"🧠 SYNTHETIC L2 déjà intégré au pipeline (calculé pré-calibration TP).", flush=True)
 
-            # v4.1 — F3 : sélection best LONG + best SHORT indépendants
-            selected_items = _select_best_per_direction(stocks_results, etfs_results, market_bias)
+            # v4.2 — F4 : sélection top-down stricte avec règle de diversité
+            selected_items = _select_top_candidates_with_diversity_rules(
+                stocks_results, etfs_results, market_bias
+            )
 
             now_scan = datetime.now(MONTREAL_TZ)
             header = (
