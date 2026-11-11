@@ -62,6 +62,23 @@
 #       (même type ET même direction / même type / même direction).
 #       _select_best_per_direction est conservée (legacy) mais
 #       n'est plus appelée.
+#
+# >>> v4.4 — PERFORMANCE & DIAGNOSTIC (phase 1) <<<
+#   P1. Flux RSS (CBC, Financial Post) téléchargés UNE fois par scan
+#       (refresh_rss_cache) au lieu d'une fois par ticker.
+#   P2. Sortie anticipée : score + 1 < minimum -> rejet avant news et
+#       historique 5 min (la news ne peut valoir qu'un point).
+#       ETFs : filtre de score avant le téléchargement de structure.
+#   P3. get_market_cap_category réutilise `info` (plus de 2e .info).
+#   P4. UN seul téléchargement 1 min par ticker (HTTP_SESSION + retry),
+#       partagé entre VWAP/POC et Synthetic L2 (3 -> 1 appels).
+#       VWAP/POC calculés localement avec les MÊMES formules que
+#       pro_volume_profile.py, qui n'est plus importé ni modifié
+#       (l'autre bot qui l'utilise n'est pas impacté).
+#   P5. Régime : barre quotidienne partielle exclue (flag
+#       regime.exclude_partial_bar) ; logs de diagnostic enrichis
+#       (tendance, SMA20/50, ADX).
+#   P6. Chronométrage par phase + compteur vwap_na (VWAP/POC manquants).
 # ============================================================
 
 import requests
@@ -166,6 +183,7 @@ CONFIG = {
 
     "regime": {
         "enabled": True,
+        "exclude_partial_bar": True,   # v4.4 — P5
         "benchmark_ticker": "^GSPTSE",
         "lookback_period": "6mo",
         "adx_period": 14,
@@ -472,6 +490,37 @@ def get_early_close_hour(check_date):
         check_date = check_date.date()
     return _build_early_close_dates(check_date.year).get(check_date)
 
+RSS_CACHE = []
+
+def refresh_rss_cache():
+    """v4.4 — P1 : télécharge et parse les flux RSS UNE fois par scan."""
+    global RSS_CACHE
+    items = []
+    for feed_url in RSS_FEEDS:
+        try:
+            r = requests.get(feed_url, timeout=5)
+            soup = BeautifulSoup(r.content, "xml")
+            for item in soup.find_all("item")[:15]:
+                title = item.find("title").text if item.find("title") else ""
+                description = item.find("description").text if item.find("description") else ""
+                pub_date_str = item.find("pubDate").text if item.find("pubDate") else ""
+                try:
+                    pub_date = datetime.strptime(pub_date_str, "%a, %d %b %Y %H:%M:%S %Z").replace(tzinfo=timezone.utc)
+                    hours_ago = (datetime.now(timezone.utc) - pub_date).total_seconds() / 3600
+                    if hours_ago < 6:
+                        items.append({
+                            "title": title,
+                            "title_u": title.upper(),
+                            "desc_u": description.upper(),
+                            "hours_ago": hours_ago,
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    RSS_CACHE = items
+    return len(items)
+
 def get_news_for_ticker(ticker):
     all_news = []
     ticker_clean = ticker.replace(".TO", "").replace(".V", "").upper()
@@ -491,24 +540,9 @@ def get_news_for_ticker(ticker):
                 pass
     except:
         pass
-    for feed_url in RSS_FEEDS:
-        try:
-            r = requests.get(feed_url, timeout=5)
-            soup = BeautifulSoup(r.content, "xml")
-            for item in soup.find_all("item")[:15]:
-                title = item.find("title").text if item.find("title") else ""
-                description = item.find("description").text if item.find("description") else ""
-                if ticker_clean in title.upper() or ticker_clean in description.upper():
-                    pub_date_str = item.find("pubDate").text if item.find("pubDate") else ""
-                    try:
-                        pub_date = datetime.strptime(pub_date_str, "%a, %d %b %Y %H:%M:%S %Z").replace(tzinfo=timezone.utc)
-                        hours_ago = (datetime.now(timezone.utc) - pub_date).total_seconds() / 3600
-                        if hours_ago < 6:
-                            all_news.append({"title": title, "hours_ago": hours_ago})
-                    except:
-                        pass
-        except:
-            pass
+    for it in RSS_CACHE:
+        if ticker_clean in it["title_u"] or ticker_clean in it["desc_u"]:
+            all_news.append({"title": it["title"], "hours_ago": it["hours_ago"]})
     seen = set()
     unique_news = []
     for n in all_news:
@@ -535,11 +569,39 @@ def analyze_sentiment(title):
         score -= 1
     return score
 
-from pro_volume_profile import get_volume_profile
+def fetch_intraday_1m(ticker):
+    """v4.4 — P4 : UN seul téléchargement 1 min (session courante) par ticker,
+    via la session HTTP partagée (retry). Réutilisé par VWAP/POC et Synthetic L2."""
+    try:
+        h = yf.Ticker(ticker, session=HTTP_SESSION).history(
+            period="1d", interval="1m", prepost=False, auto_adjust=False
+        )
+        if h is None or h.empty:
+            return None
+        return h
+    except Exception:
+        return None
 
-def get_vwap_poc(ticker, current_price, direction="LONG"):
-    profile = get_volume_profile(ticker, current_price, direction)
-    return profile.get("vwap"), profile.get("poc")
+def compute_vwap_poc(hist):
+    """v4.4 — P4 : mêmes formules que pro_volume_profile.calculate_vwap /
+    calculate_poc (module partagé avec un autre bot, NON modifié) :
+      VWAP = somme(prix typique (H+L+C)/3 x volume) / somme(volume)
+      POC  = Close arrondi à 0,01 $ ayant le plus de volume cumulé
+    Retourne (None, None) si l'un des deux est indisponible (comme le module).
+    Seul écart : volume cumulé nul -> (None, None) au lieu de NaN."""
+    try:
+        if hist is None or hist.empty or len(hist) < 10:
+            return None, None
+        volume_total = float(hist["Volume"].sum())
+        if not volume_total > 0:
+            return None, None
+        typical_price = (hist["High"] + hist["Low"] + hist["Close"]) / 3
+        vwap = round(float((typical_price * hist["Volume"]).sum() / volume_total), 2)
+        price_levels = hist["Close"].round(2)
+        poc = round(float(hist.groupby(price_levels)["Volume"].sum().idxmax()), 2)
+        return vwap, poc
+    except Exception:
+        return None, None
 
 def calculate_adx_atr(df, period=14):
     high = df["High"].astype(float)
@@ -593,6 +655,13 @@ def detect_market_regime(verbose=True):
     try:
         idx = yf.Ticker(REGIME_CONFIG["benchmark_ticker"], session=HTTP_SESSION)
         hist = idx.history(period=REGIME_CONFIG["lookback_period"], interval="1d")
+        if REGIME_CONFIG.get("exclude_partial_bar", True) and hist is not None and not hist.empty:
+            try:
+                today = datetime.now(MONTREAL_TZ).date()
+                if hasattr(hist.index[-1], "date") and hist.index[-1].date() == today:
+                    hist = hist.iloc[:-1]
+            except Exception:
+                pass
         if hist is None or hist.empty or len(hist) < 30:
             if verbose:
                 print("⚠️ Régime: historique indice insuffisant, fallback Neutral.", flush=True)
@@ -675,6 +744,10 @@ def detect_market_regime(verbose=True):
             "atr_pct": round(float(current_atr_pct), 2) if current_atr_pct is not None else None,
             "atr_percentile": round(atr_percentile, 0) if atr_percentile is not None else None,
             "trend_direction": trend_direction,
+            "is_trending": bool(is_trending),
+            "index_price": round(float(current_price), 2),
+            "sma20": round(float(sma20.iloc[-1]), 2) if not sma20.isna().iloc[-1] else None,
+            "sma50": round(float(sma50.iloc[-1]), 2) if sma50 is not None and not sma50.isna().iloc[-1] else None,
             "score_min_stock_adj": score_min_stock_adj,
             "score_min_etf_adj": score_min_etf_adj,
             "gap_min_long_adj": gap_min_long_adj,
@@ -687,6 +760,13 @@ def detect_market_regime(verbose=True):
                 f"🧭 RÉGIME: {result['regime']} | Bias: {result['bias']} | "
                 f"Vol: {result['volatility']} | ADX: {result['adx']} | "
                 f"ATR%: {result['atr_pct']} (percentile: {result['atr_percentile']})",
+                flush=True
+            )
+            print(
+                f"🧭 DIAG: trending={result['is_trending']} (ADX seuil {REGIME_CONFIG['trend_adx_threshold']}) | "
+                f"tendance={result['trend_direction']} | indice={result['index_price']} "
+                f"SMA20={result['sma20']} SMA50={result['sma50']} | "
+                f"barre partielle exclue={REGIME_CONFIG.get('exclude_partial_bar', True)}",
                 flush=True
             )
         return result
@@ -813,7 +893,7 @@ def calculate_candle_flow(df):
     clv = clv.fillna(0).clip(-1, 1)
     return clv
 
-def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=None, poc=None, verbose=False):
+def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=None, poc=None, verbose=False, hist=None):
     neutral_result = {
         "score": 50.0, "label": "Neutral", "flow": 0.0,
         "volume_acceleration": 1.0, "momentum_pct": 0.0,
@@ -824,8 +904,12 @@ def calculate_synthetic_l2(ticker, direction, current_price, spread_pct, vwap=No
     if not SYNTHETIC_L2_CONFIG["enabled"]:
         return neutral_result
     try:
-        ticker_obj = yf.Ticker(ticker, session=HTTP_SESSION)
-        hist = ticker_obj.history(period="1d", interval=SYNTHETIC_L2_CONFIG["interval"], prepost=False, auto_adjust=False)
+        # v4.4 — P4 : historique 1 min partagé (évite un 3e téléchargement)
+        if hist is not None and SYNTHETIC_L2_CONFIG["interval"] != "1m":
+            hist = None
+        if hist is None:
+            ticker_obj = yf.Ticker(ticker, session=HTTP_SESSION)
+            hist = ticker_obj.history(period="1d", interval=SYNTHETIC_L2_CONFIG["interval"], prepost=False, auto_adjust=False)
         if hist is None or hist.empty:
             return neutral_result
         required = ["Open", "High", "Low", "Close", "Volume"]
@@ -1077,9 +1161,10 @@ def calculate_priority_score(data, market_bias, is_etf=False):
     total += rvol_adj
     return round(total, 2)
 
-def get_market_cap_category(ticker):
+def get_market_cap_category(ticker, info=None):
     try:
-        info = yf.Ticker(ticker).info
+        if info is None:
+            info = yf.Ticker(ticker).info
         mc = info.get("marketCap", 0)
         if mc == 0:
             return "N/A"
@@ -1716,6 +1801,15 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
         if sma50:
             if (direction == "LONG" and price > sma50) or (direction == "SHORT" and price < sma50):
                 score += 1
+        # v4.4 — P2 : sortie anticipée. La news ne peut valoir qu'UN point
+        # (+1 max) : si score + 1 < minimum, le ticker est perdu d'avance.
+        timing_pen = get_timing_penalty()
+        effective_score_min = min(7, SCORE_MIN_STOCKS + regime.get("score_min_stock_adj", 0) + timing_pen)
+        if score + 1 < effective_score_min:
+            if verbose:
+                print(f"  📊 Score: {score}/7 (pré-news) < min {effective_score_min} | Gap: {gap:.2f}% | Direction: {direction}", flush=True)
+            reject_stats["score"] = reject_stats.get("score", 0) + 1
+            return None
         news = get_news_for_ticker(ticker)
         if news:
             for n in news[:3]:
@@ -1732,6 +1826,12 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
                 elif direction == "SHORT" and sent >= 2:
                     score -= 1
                     break
+
+        if score < effective_score_min:
+            if verbose:
+                print(f"  📊 Score: {score}/7 < min {effective_score_min} | Gap: {gap:.2f}% | Direction: {direction}", flush=True)
+            reject_stats["score"] = reject_stats.get("score", 0) + 1
+            return None
 
         structure_hist = fetch_intraday_structure(ticker)
         rvol = calculate_intraday_rvol_from_hist(structure_hist) \
@@ -1752,23 +1852,17 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
             rvol_display = f"x{rvol:.2f}" if rvol is not None else "N/A"
             print(f"  📊 Score: {score}/7 | Gap: {gap:.2f}% | Vol: x{vol_ratio:.2f} | RVOL: {rvol_display} | Direction: {direction}", flush=True)
 
-        timing_pen = get_timing_penalty()
-        effective_score_min = min(7, SCORE_MIN_STOCKS + regime.get("score_min_stock_adj", 0) + timing_pen)
-        if score < effective_score_min:
-            reject_stats["score"] = reject_stats.get("score", 0) + 1
-            return None
-
         inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
         if verbose:
             print(f"     🏛️ Inst. Interest: {inst_score}/10", flush=True)
 
-        vwap, poc = get_vwap_poc(ticker, price, direction)
-        if vwap is not None:
-            vwap = round(vwap, 2)
-        if poc is not None:
-            poc = round(poc, 2)
+        hist_1m = fetch_intraday_1m(ticker)
+        vwap, poc = compute_vwap_poc(hist_1m)
+        if vwap is None or poc is None:
+            reject_stats["vwap_na"] = reject_stats.get("vwap_na", 0) + 1
+            vwap, poc = None, None
 
-        cap_category = get_market_cap_category(ticker)
+        cap_category = get_market_cap_category(ticker, info=info)
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, cap_category)
         held_missing = inst_details.get("held_missing", False)
@@ -1817,7 +1911,8 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
 
         l2_result = calculate_synthetic_l2(
             ticker=ticker, direction=direction, current_price=price,
-            spread_pct=spread_pct, vwap=vwap, poc=poc, verbose=False
+            spread_pct=spread_pct, vwap=vwap, poc=poc, verbose=False,
+            hist=hist_1m
         )
         l2_score = l2_result["score"]
         l2_label = l2_result["label"]
@@ -2040,6 +2135,13 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
                 elif direction == "SHORT" and price < 1.3 * sma20:
                     score += 1
 
+        # v4.4 — P2 : filtre de score AVANT le téléchargement de structure 5 min
+        timing_pen = get_timing_penalty()
+        effective_score_min = min(5, SCORE_MIN_ETFS + regime.get("score_min_etf_adj", 0) + timing_pen)
+        if score < effective_score_min:
+            reject_stats["score"] = reject_stats.get("score", 0) + 1
+            return None
+
         structure_hist = fetch_intraday_structure(ticker)
         rvol = calculate_intraday_rvol_from_hist(structure_hist) \
                if INTRADAY_FILTERS.get("rvol_enabled", True) else None
@@ -2054,20 +2156,14 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
                 reject_stats["rvol"] = reject_stats.get("rvol", 0) + 1
                 return None
 
-        timing_pen = get_timing_penalty()
-        effective_score_min = min(5, SCORE_MIN_ETFS + regime.get("score_min_etf_adj", 0) + timing_pen)
-        if score < effective_score_min:
-            reject_stats["score"] = reject_stats.get("score", 0) + 1
-            return None
-
         exchange = get_exchange(info)
         confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
         inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
-        vwap, poc = get_vwap_poc(ticker, price, direction)
-        if vwap is not None:
-            vwap = round(vwap, 2)
-        if poc is not None:
-            poc = round(poc, 2)
+        hist_1m = fetch_intraday_1m(ticker)
+        vwap, poc = compute_vwap_poc(hist_1m)
+        if vwap is None or poc is None:
+            reject_stats["vwap_na"] = reject_stats.get("vwap_na", 0) + 1
+            vwap, poc = None, None
         short_ratio = info.get("shortRatio", None)
 
         prior_high, prior_low = _prior_day_hl_from_daily(hist)
@@ -2117,7 +2213,8 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
 
         l2_result = calculate_synthetic_l2(
             ticker=ticker, direction=direction, current_price=price,
-            spread_pct=spread_pct, vwap=vwap, poc=poc, verbose=False
+            spread_pct=spread_pct, vwap=vwap, poc=poc, verbose=False,
+            hist=hist_1m
         )
         l2_score = l2_result["score"]
         l2_label = l2_result["label"]
@@ -2365,7 +2462,7 @@ def _reset_reject_stats():
     return {
         "price_limits": 0, "spread": 0, "gap": 0, "vol_ratio": 0,
         "rvol": 0, "score": 0, "sl": 0, "tp": 0, "rr_min": 0,
-        "fees": 0, "atr_cap": 0, "direction": 0, "exception": 0,
+        "fees": 0, "atr_cap": 0, "direction": 0, "exception": 0, "vwap_na": 0,
     }
 
 def _print_reject_stats(stats, label):
@@ -2542,12 +2639,16 @@ def main():
 
         if is_scan_time:
             print(f"\n📊 Scan à {now.strftime('%H:%M')} (session {session})", flush=True)
+            t_scan0 = time.time()
 
             print("\n🧭 ================================", flush=True)
             print("🧭 DÉTECTION DE RÉGIME DE MARCHÉ", flush=True)
             print("🧭 ================================", flush=True)
             regime = detect_market_regime(verbose=True)
             market_bias = regime["bias"]
+            t_regime = time.time()
+            n_rss = refresh_rss_cache()
+            print(f"📰 Cache RSS : {n_rss} articles < 6 h", flush=True)
 
             stocks_reject = _reset_reject_stats()
             stocks_results = []
@@ -2561,6 +2662,7 @@ def main():
                 else:
                     print("    ❌", flush=True)
             _print_reject_stats(stocks_reject, "STOCKS")
+            t_stocks = time.time()
 
             etfs_reject = _reset_reject_stats()
             etfs_results = []
@@ -2574,6 +2676,7 @@ def main():
                 else:
                     print("❌", flush=True)
             _print_reject_stats(etfs_reject, "ETFS")
+            t_etfs = time.time()
 
             print(f"🧠 SYNTHETIC L2 déjà intégré au pipeline (calculé pré-calibration TP).", flush=True)
 
@@ -2615,6 +2718,13 @@ def main():
             msg += "\n━━━━━━━━━━━━━━━━━\n\n"
             msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
             send_telegram(msg)
+            t_end = time.time()
+            print(
+                f"⏱️ Durée scan : régime {t_regime - t_scan0:.0f}s | stocks (+RSS) {t_stocks - t_regime:.0f}s | "
+                f"ETFs {t_etfs - t_stocks:.0f}s | sélection+Telegram {t_end - t_etfs:.0f}s | "
+                f"TOTAL {t_end - t_scan0:.0f}s",
+                flush=True
+            )
 
         next_scan_time = None
         for h, m in zip(scan_hours, scan_minutes):
