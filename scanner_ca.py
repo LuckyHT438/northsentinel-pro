@@ -79,6 +79,52 @@
 #       regime.exclude_partial_bar) ; logs de diagnostic enrichis
 #       (tendance, SMA20/50, ADX).
 #   P6. Chronométrage par phase + compteur vwap_na (VWAP/POC manquants).
+#
+# >>> v4.5 — ROBUSTESSE & PLANIFICATION (2026-11-11) <<<
+#   R1. Calendrier TSX : un férié tombant un week-end est reporté au prochain
+#       jour ouvrable libre (Boxing Day 2026 -> lundi 28/12 ; 2027 -> 27 et
+#       28/12). L'ancienne règle (samedi -> vendredi) ouvrait ces jours-là.
+#   R2. Conviction SHORT : "Moderate" accepté aussi en biais Risk-off (symétrie LONG).
+#   R3. Pannes de données distinguées des rejets (data_missing) ; erreurs
+#       réseau comptées par scan (DATA_ERRORS) ; exceptions typées dans les logs.
+#   R4. Telegram : 3 tentatives, gestion du 429, repli en texte brut si le HTML
+#       est refusé, token + chat_id vérifiés.
+#   R5. PLANIFICATION : créneaux traités un à un avec RATTRAPAGE (jusqu'à 12 min
+#       de retard) ; créneau manqué signalé sur Telegram ; un scan qui plante
+#       n'empêche plus les créneaux suivants (try/except par scan) ; plus de
+#       report de +60 min quand un scan déborde ; fin de session = plus aucun
+#       créneau à traiter (plus d'heure de fin fixe qui coupait le 11:15).
+#   R6. Fraîcheur des cotes : âge loggé et signalé dans les LOGS au-delà de
+#       20 min ; re-cotation des setups retenus avant envoi (dérive loggée).
+#   R7. Interrupteurs DÉSACTIVÉS par défaut (data_robustness) :
+#       rvol_for_volume_signals (RVOL intraday à la place du volume cumulé)
+#       missing_data_gives_point=False (donnée absente = 0 point).
+#       Comptage des "points gratuits" toujours actif (visibilité).
+#   R8. Paramètres sans effet marqués "INACTIF" dans CONFIG (aucun changement).
+#
+# >>> v4.6 — QUANTITÉ PAR PALIERS (2026-11-11) <<<
+#   Q1. QUANTITY = palier x quantité maximale autorisée (10 % du capital),
+#       palier = f(VERDICT, CONVICTION, RANK), quels que soient régime, biais
+#       de marché et direction :
+#           VERDICT   : Strong -> 100 %, Favorable -> 67 %, Mixed -> 33 %
+#           CONVICTION: Low retire un cran (plancher 33 %) ; High/Moderate = 0
+#       Reprend tes 3 règles (Strong+High/Moderate = 100 % ; Favorable+Moderate
+#       = 67 % ; Mixed+Low = 33 %) et comble les 6 autres combinaisons.
+#   Q2. RANK 2/2 : palier plafonné à 67 %.
+#   Q3. RVOL intraday ACTIVÉ pour les signaux de volume
+#       (data_robustness.rvol_for_volume_signals = True) : le volume cumulé du
+#       jour sous-estimait mécaniquement le volume le matin et faussait
+#       VERDICT/CONVICTION, désormais utilisés pour dimensionner. Le scan loggue
+#       la répartition Verdict x Conviction des candidats pour calibrer.
+#   Pas de plafond d'exposition par scan : un seul setup est exécuté par message.
+#
+# >>> v4.7 — MESSAGES TELEGRAM INCHANGÉS (2026-11-11) <<<
+#   Structure et contenu des messages Telegram strictement identiques à la v4.4
+#   (en-tête, bloc setup, « No valid setup », fin de session). Seule la VALEUR
+#   de la ligne QUANTITY résulte des paliers v4.6. Retirés des messages : ligne
+#   SIZING, âge de cote, dérive de prix (désormais dans les logs). Messages
+#   supplémentaires (créneau manqué, scan en échec) désactivés par défaut :
+#   scheduling.notify_missed_slot / notify_scan_failure.
 # ============================================================
 
 import requests
@@ -127,7 +173,7 @@ CONFIG = {
         "ibkr_regulatory_per_share": 0.0,
         "ibkr_regulatory_cap_per_order": 0.0,
         "fee_safety_buffer_per_order": 1.00,
-        "fee_safe_trailing": True,
+        "fee_safe_trailing": True,   # INACTIF : non lu par le code
         "fee_margin_factor": 1.05
     },
 
@@ -136,7 +182,7 @@ CONFIG = {
         "intraday_period": "5d",
         "intraday_interval": "5m",
         "lookback_bars": 48,
-        "swing_window": 3,
+        "swing_window": 3,                       # INACTIF : non lu par le code
         "structure_buffer_atr": 0.35,
         "min_sl_atr": 0.55,
         "max_sl_atr": 3.00,
@@ -144,8 +190,8 @@ CONFIG = {
         "max_sl_pct": 3.00,
         "breakout_tolerance_pct": 0.35,
         "support_resistance_tolerance_pct": 0.50,
-        "reject_if_structure_unavailable": True,
-        "require_room_to_tp": True
+        "reject_if_structure_unavailable": True,  # INACTIF : non lu par le code
+        "require_room_to_tp": True               # INACTIF : non lu par le code
     },
 
     "synthetic_l2": {
@@ -163,7 +209,7 @@ CONFIG = {
         "bonus_supportive": 1.5,
         "penalty_weak": -2.0,
         "penalty_bad": -4.0,
-        "priority_threshold_for_pair": 12.0
+        "priority_threshold_for_pair": 12.0      # INACTIF : legacy (v4.1)
     },
 
     "direction_control": {
@@ -172,7 +218,7 @@ CONFIG = {
     },
 
     "short_adjustment": {
-        "sl_widening_pct": 0.4,
+        "sl_widening_pct": 0.4,        # INACTIF : jamais appliqué (le SL des SHORTs n'est pas élargi)
         "trail_widening_pct": 0.2,
         "gap_min_short": -0.5,         # v4.1 — F2 : -1.0 → -0.5 (symétrie LONG)
         "vol_ratio_min_short": 0.0,    # v4.1 — F1 : 0.3 → 0.0 (filtre mort)
@@ -235,6 +281,7 @@ CONFIG = {
 
     "intraday_filters": {
         "timing_penalty_windows": [
+            # INACTIF en pratique : le 1er scan démarre à 09:45 (585), hors de cette fenêtre
             {"start_min": 570, "end_min": 585, "penalty": 1},
         ],
 
@@ -248,9 +295,34 @@ CONFIG = {
         "rvol_penalty_weak": -1.0,
         "rvol_apply_reject_after_min": 660,
 
-        "structural_tp_enabled": True,
+        "structural_tp_enabled": True,   # INACTIF : le TP structurel est toujours actif
         "structural_tp_atr_lower_mult": 0.40,
         "structural_tp_atr_upper_mult": 1.80,
+    },
+
+    "scheduling": {
+        "catchup_grace_min": 12,       # un créneau peut démarrer jusqu'à 12 min en retard
+        "notify_missed_slot": False,   # True = message Telegram si un créneau est définitivement manqué (log toujours écrit)
+        "notify_scan_failure": False,  # True = message Telegram si un scan plante (log toujours écrit)
+    },
+
+    "data_robustness": {
+        "quote_warn_after_min": 20,    # avertir si la cote a plus de 20 min
+        "requote_before_send": True,   # re-coter les setups retenus juste avant l'envoi
+        "drift_warn_pct": 0.30,        # avertir si le prix a bougé de plus de 0,30 % depuis le scan
+        "rvol_for_volume_signals": True,    # v4.6 : True = RVOL intraday ; False = volume cumulé (historique)
+        "missing_data_gives_point": True,   # True = historique (float/beta/shortRatio absents = +1)
+    },
+
+    "telegram": {
+        "max_attempts": 3,
+    },
+
+    "position_sizing": {
+        "enabled": True,               # False = quantité maximale pour tous les setups (comportement v4.5)
+        "tiers_pct": [33, 67, 100],    # paliers : Mixed, Favorable, Strong
+        "low_conviction_notches": 1,   # CONVICTION Low : retire 1 cran (plancher = 1er palier)
+        "rank2_cap_pct": 67,           # RANK 2/2 : palier plafonné
     },
 
     "tickers": {
@@ -338,6 +410,9 @@ REGIME_CONFIG = CONFIG["regime"]
 INTRADAY_FILTERS = CONFIG["intraday_filters"]
 DIRECTION_CONTROL = CONFIG["direction_control"]
 TP_CALIBRATION = CONFIG["tp_calibration"]
+SCHED_CONFIG = CONFIG["scheduling"]
+ROBUST_CONFIG = CONFIG["data_robustness"]
+SIZING_CONFIG = CONFIG["position_sizing"]
 
 SHORT_ADJ = CONFIG["short_adjustment"]
 SHORT_SL_WIDENING = SHORT_ADJ["sl_widening_pct"]
@@ -384,23 +459,64 @@ def create_session():
 
 HTTP_SESSION = create_session()
 
-def send_telegram(message):
-    if not TELEGRAM_TOKEN:
-        print("⚠️ Token Telegram manquant", flush=True)
+DATA_ERRORS = {}
+
+def _note_error(kind):
+    """v4.5 — compte les erreurs réseau/données par type (remis à zéro à chaque scan)."""
+    DATA_ERRORS[kind] = DATA_ERRORS.get(kind, 0) + 1
+
+def _reset_data_errors():
+    DATA_ERRORS.clear()
+
+def _print_data_errors():
+    if DATA_ERRORS:
+        detail = " ".join(f"{k}={v}" for k, v in sorted(DATA_ERRORS.items()))
+        print(f"  📡 Erreurs réseau/données ce scan : {detail}", flush=True)
+
+def _strip_html(text):
+    return re.sub(r"<[^>]+>", "", text)
+
+def send_telegram(message, max_attempts=None):
+    """v4.5 — retry, gestion du 429 (retry_after), repli en texte brut si le
+    HTML est refusé, token + chat_id vérifiés. Retourne True si envoyé."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Token ou chat_id Telegram manquant", flush=True)
         return False
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-        r = requests.post(url, json=payload, timeout=10)
-        if r.status_code == 200:
-            print("✅ Telegram envoyé", flush=True)
-            return True
-        else:
-            print(f"❌ Erreur Telegram {r.status_code}: {r.text}", flush=True)
-            return False
-    except Exception as e:
-        print(f"❌ Exception Telegram: {e}", flush=True)
-        return False
+    attempts = int(max_attempts or CONFIG.get("telegram", {}).get("max_attempts", 3))
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message[:4096], "parse_mode": "HTML"}
+    wait = 2
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.post(url, json=payload, timeout=10)
+            if r.status_code == 200:
+                suffix = f" (tentative {attempt})" if attempt > 1 else ""
+                print(f"✅ Telegram envoyé{suffix}", flush=True)
+                return True
+            body = r.text or ""
+            if r.status_code == 400 and "parse" in body.lower() and payload.get("parse_mode"):
+                print("⚠️ Telegram: format HTML refusé — repli en texte brut", flush=True)
+                payload = {"chat_id": TELEGRAM_CHAT_ID, "text": _strip_html(message)[:4096]}
+                continue
+            if r.status_code == 429:
+                try:
+                    wait = int(r.json().get("parameters", {}).get("retry_after", 5))
+                except Exception:
+                    wait = 5
+                wait = min(max(wait, 1), 30)
+            elif r.status_code >= 500:
+                wait = 2 * attempt
+            else:
+                print(f"❌ Erreur Telegram {r.status_code}: {body}", flush=True)
+                return False
+            print(f"⚠️ Telegram {r.status_code} — nouvelle tentative dans {wait}s ({attempt}/{attempts})", flush=True)
+        except Exception as e:
+            wait = 2 * attempt
+            print(f"⚠️ Exception Telegram ({attempt}/{attempts}): {type(e).__name__}: {e}", flush=True)
+        if attempt < attempts:
+            time.sleep(wait)
+    print("❌ Telegram: échec après toutes les tentatives", flush=True)
+    return False
 
 def send_session_end_message(now, session):
     session_label = "Morning" if session == "morning" else "Afternoon"
@@ -414,13 +530,6 @@ def send_session_end_message(now, session):
         "<i>Informational automated signal. Not financial or trading advice.</i>"
     )
     send_telegram(msg)
-
-def _adjust_weekend(d):
-    if d.weekday() == 5:
-        return d - timedelta(days=1)
-    if d.weekday() == 6:
-        return d + timedelta(days=1)
-    return d
 
 def _build_ca_holidays(year):
     from datetime import date
@@ -467,17 +576,32 @@ def _build_ca_holidays(year):
     ca.add(thanks + timedelta(days=7))
     return ca
 
+def _observed_ca_holidays(year):
+    """v4.5 — jours fériés TSX observés. Un férié tombant un samedi/dimanche
+    est reporté au prochain jour ouvrable libre (lundi, puis mardi si le lundi
+    est déjà férié). Ex. : Boxing Day sam. 26/12/2026 -> lun. 28/12 ;
+    2027 : Noël sam. -> lun. 27/12, Boxing Day dim. -> mar. 28/12."""
+    nominal = sorted(_build_ca_holidays(year))
+    observed = {d for d in nominal if d.weekday() < 5}
+    for d in nominal:
+        if d.weekday() >= 5:
+            o = d
+            while o.weekday() >= 5 or o in observed:
+                o += timedelta(days=1)
+            observed.add(o)
+    return observed
+
 def is_ca_market_closed(check_date):
     if isinstance(check_date, datetime):
         check_date = check_date.date()
     if check_date.weekday() >= 5:
         return True
-    holidays = _build_ca_holidays(check_date.year)
-    adjusted = {_adjust_weekend(d) for d in holidays}
-    return check_date in adjusted
+    return check_date in _observed_ca_holidays(check_date.year)
 
 def _build_early_close_dates(year):
     from datetime import date
+    # À VÉRIFIER auprès de la TSX : seule la veille de Noël (24/12, 13 h) est
+    # confirmée par le calendrier officiel consulté ; le 31/12 n'a pas été retrouvé.
     return {date(year, 12, 24): 13, date(year, 12, 31): 13}
 
 def is_early_close(check_date):
@@ -517,7 +641,7 @@ def refresh_rss_cache():
                 except Exception:
                     pass
         except Exception:
-            pass
+            _note_error("rss")
     RSS_CACHE = items
     return len(items)
 
@@ -536,10 +660,10 @@ def get_news_for_ticker(ticker):
                 hours_ago = (datetime.now(timezone.utc) - pub_date).total_seconds() / 3600
                 if hours_ago < 6:
                     all_news.append({"title": title, "hours_ago": hours_ago})
-            except:
+            except Exception:
                 pass
-    except:
-        pass
+    except Exception:
+        _note_error("news_google")
     for it in RSS_CACHE:
         if ticker_clean in it["title_u"] or ticker_clean in it["desc_u"]:
             all_news.append({"title": it["title"], "hours_ago": it["hours_ago"]})
@@ -577,9 +701,11 @@ def fetch_intraday_1m(ticker):
             period="1d", interval="1m", prepost=False, auto_adjust=False
         )
         if h is None or h.empty:
+            _note_error("hist_1m")
             return None
         return h
     except Exception:
+        _note_error("hist_1m")
         return None
 
 def compute_vwap_poc(hist):
@@ -1087,7 +1213,7 @@ def calculate_conviction(direction, gap, vol_ratio, vwap, entry_price, inst_inte
             green_count += 1
         if green_count >= 4 and bias in ["Neutral", "Risk-off"]:
             return "High", "🟢"
-        elif green_count >= 3 and bias == "Neutral":
+        elif green_count >= 3 and bias in ["Neutral", "Risk-off"]:
             return "Moderate", "🔵"
         else:
             return "Low", "🟡"
@@ -1180,6 +1306,17 @@ def get_market_cap_category(ticker, info=None):
     except:
         return "N/A"
 
+def _quote_age_minutes(info):
+    """v4.5 — âge de la cote Yahoo en minutes (regularMarketTime), None si inconnu."""
+    ts = info.get("regularMarketTime")
+    if not ts:
+        return None
+    try:
+        epoch = float(ts) if isinstance(ts, (int, float)) else ts.timestamp()
+        return max(0.0, (time.time() - epoch) / 60.0)
+    except Exception:
+        return None
+
 def get_exchange(info):
     ex = info.get("exchange", "")
     map_ex = {"TOR": "TMX", "TSX": "TMX", "TSXV": "TSXV", "CNQ": "CSE", "V": "TSXV"}
@@ -1236,6 +1373,7 @@ def get_daily_context(ticker, period=14, verbose=False):
     try:
         hist = yf.Ticker(ticker, session=HTTP_SESSION).history(period="2mo", interval="1d")
         if hist is None or hist.empty or len(hist) < period + 1:
+            _note_error("hist_daily")
             return None
         atr_pct = calculate_atr_pct_from_ohlc(
             hist["High"].astype(float), hist["Low"].astype(float), hist["Close"].astype(float), period
@@ -1243,6 +1381,7 @@ def get_daily_context(ticker, period=14, verbose=False):
         prior_high, prior_low = _prior_day_hl_from_daily(hist)
         return {"atr_pct": atr_pct, "prior_high": prior_high, "prior_low": prior_low}
     except Exception as e:
+        _note_error("hist_daily")
         if verbose:
             print(f"     ⚠️ Contexte daily indisponible pour {ticker}: {e}", flush=True)
         return None
@@ -1308,6 +1447,7 @@ def fetch_intraday_structure(ticker, period=None, interval=None):
             period=period, interval=interval, prepost=False, auto_adjust=False
         )
         if hist is None or hist.empty:
+            _note_error("hist_5m")
             return None
         required = ["Open", "High", "Low", "Close", "Volume"]
         if not all(c in hist.columns for c in required):
@@ -1321,6 +1461,7 @@ def fetch_intraday_structure(ticker, period=None, interval=None):
             pass
         return hist.tail(TECH_STRUCTURE_CONFIG["lookback_bars"])
     except Exception:
+        _note_error("hist_5m")
         return None
 
 def _intraday_atr(hist, period=14):
@@ -1716,11 +1857,17 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
         info = stock.info
         time.sleep(random.uniform(0.3, 0.6))
         price = info.get("regularMarketPrice") or info.get("currentPrice")
-        if not price or price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
+        if not price:
+            if verbose:
+                print("  ❌ Données indisponibles (cote absente — limite de débit ?)", flush=True)
+            reject_stats["data_missing"] = reject_stats.get("data_missing", 0) + 1
+            return None
+        if price < PRICE_MIN_STOCKS or price > PRICE_MAX_STOCKS:
             if verbose:
                 print(f"  ❌ Prix hors limites ({price})", flush=True)
             reject_stats["price_limits"] = reject_stats.get("price_limits", 0) + 1
             return None
+        quote_age = _quote_age_minutes(info)
         bid = info.get("bid")
         ask = info.get("ask")
         spread_pct = 0.0
@@ -1734,7 +1881,7 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
                 return None
         prev_close = info.get("previousClose")
         if not prev_close or prev_close == 0:
-            reject_stats["exception"] = reject_stats.get("exception", 0) + 1
+            reject_stats["data_missing"] = reject_stats.get("data_missing", 0) + 1
             return None
         gap = ((price - prev_close) / prev_close) * 100
 
@@ -1778,25 +1925,35 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
         # seul juge de liquidité (correctement normalisé par construction).
         # Le point bonus pour vol_ratio > threshold reste attribué aux SHORTs
         # au-dessus de SHORT_VOL_MIN (= 0.0 désormais, donc toujours).
-        vol_threshold = SHORT_VOL_MIN if direction == "SHORT" else 0.0
-        if vol_ratio > vol_threshold:
-            score += 1
+        # v4.5 — R7 : interrupteurs data_robustness (désactivés par défaut)
+        vol_point_deferred = bool(ROBUST_CONFIG.get("rvol_for_volume_signals", False))
+        free_pts = bool(ROBUST_CONFIG.get("missing_data_gives_point", True))
+        if not vol_point_deferred:
+            vol_threshold = SHORT_VOL_MIN if direction == "SHORT" else 0.0
+            if vol_ratio > vol_threshold:
+                score += 1
 
         float_shares = info.get("floatShares")
         if float_shares is not None and float_shares < 100_000_000:
             score += 1
         elif float_shares is None:
-            score += 1
+            reject_stats["na_float"] = reject_stats.get("na_float", 0) + 1
+            if free_pts:
+                score += 1
         beta = info.get("beta")
         if beta is not None and beta > 0.8:
             score += 1
         elif beta is None:
-            score += 1
+            reject_stats["na_beta"] = reject_stats.get("na_beta", 0) + 1
+            if free_pts:
+                score += 1
         short_ratio = info.get("shortRatio")
         if short_ratio is not None and short_ratio > 1.5:
             score += 1
         elif short_ratio is None:
-            score += 1
+            reject_stats["na_short_ratio"] = reject_stats.get("na_short_ratio", 0) + 1
+            if free_pts:
+                score += 1
         sma50 = info.get("fiftyDayAverage")
         if sma50:
             if (direction == "LONG" and price > sma50) or (direction == "SHORT" and price < sma50):
@@ -1805,7 +1962,8 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
         # (+1 max) : si score + 1 < minimum, le ticker est perdu d'avance.
         timing_pen = get_timing_penalty()
         effective_score_min = min(7, SCORE_MIN_STOCKS + regime.get("score_min_stock_adj", 0) + timing_pen)
-        if score + 1 < effective_score_min:
+        pending_pts = 1 + (1 if vol_point_deferred else 0)   # news (+1 max) [+ point volume différé]
+        if score + pending_pts < effective_score_min:
             if verbose:
                 print(f"  📊 Score: {score}/7 (pré-news) < min {effective_score_min} | Gap: {gap:.2f}% | Direction: {direction}", flush=True)
             reject_stats["score"] = reject_stats.get("score", 0) + 1
@@ -1827,7 +1985,7 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
                     score -= 1
                     break
 
-        if score < effective_score_min:
+        if score + (1 if vol_point_deferred else 0) < effective_score_min:
             if verbose:
                 print(f"  📊 Score: {score}/7 < min {effective_score_min} | Gap: {gap:.2f}% | Direction: {direction}", flush=True)
             reject_stats["score"] = reject_stats.get("score", 0) + 1
@@ -1848,11 +2006,22 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
                 reject_stats["rvol"] = reject_stats.get("rvol", 0) + 1
                 return None
 
+        vol_signal = vol_ratio
+        if vol_point_deferred:
+            if rvol is None or rvol >= INTRADAY_FILTERS.get("rvol_weak_threshold", 0.8):
+                score += 1
+            vol_signal = rvol if rvol is not None else vol_ratio
+            if score < effective_score_min:
+                if verbose:
+                    print(f"  📊 Score: {score}/7 < min {effective_score_min} (point volume RVOL) | Gap: {gap:.2f}% | Direction: {direction}", flush=True)
+                reject_stats["score"] = reject_stats.get("score", 0) + 1
+                return None
+
         if verbose:
             rvol_display = f"x{rvol:.2f}" if rvol is not None else "N/A"
             print(f"  📊 Score: {score}/7 | Gap: {gap:.2f}% | Vol: x{vol_ratio:.2f} | RVOL: {rvol_display} | Direction: {direction}", flush=True)
 
-        inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+        inst_score, inst_details = calculate_institutional_interest(info, price, vol_signal, gap, direction)
         if verbose:
             print(f"     🏛️ Inst. Interest: {inst_score}/10", flush=True)
 
@@ -1864,7 +2033,7 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
 
         cap_category = get_market_cap_category(ticker, info=info)
         exchange = get_exchange(info)
-        confidence = get_confidence_score(score, vol_ratio, gap, cap_category)
+        confidence = get_confidence_score(score, vol_signal, gap, cap_category)
         held_missing = inst_details.get("held_missing", False)
         held_pct = 0.5 if held_missing else inst_details.get("held", 0.5)
 
@@ -1888,7 +2057,7 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
             return None
 
         tp_ref_adj, trail_adj = adjust_risk_with_factors(
-            tp_ref, spread_pct, vol_ratio, cap_category, gap, held_pct
+            tp_ref, spread_pct, vol_signal, cap_category, gap, held_pct
         )
         if direction == "SHORT":
             trail_adj += SHORT_TRAIL_WIDENING
@@ -1918,7 +2087,7 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
         l2_label = l2_result["label"]
 
         conv_label_prelim, _ = calculate_conviction(
-            direction, gap, vol_ratio, vwap, price, inst_score,
+            direction, gap, vol_signal, vwap, price, inst_score,
             regime.get("bias", "⚪ Neutral"), poc, l2_score
         )
         tp_ref_adj, tp_calib_trace = apply_tp_calibration(
@@ -2020,7 +2189,7 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
 
         return {
             "ticker": ticker, "exchange": exchange, "price": price, "gap": gap,
-            "score": score, "vol_ratio": vol_ratio, "cap_category": cap_category,
+            "score": score, "vol_ratio": vol_signal, "vol_ratio_raw": vol_ratio, "cap_category": cap_category,
             "confidence": confidence, "spread_pct": spread_pct, "direction": direction,
             "tp_mult": round(tp_mult, 3), "sl_mult": round(sl_mult, 3),
             "trail_pct": round(trail, 2), "tp_pct": round(tp_final, 2),
@@ -2041,10 +2210,11 @@ def analyze_stock(ticker, regime=None, verbose=True, reject_stats=None):
             "conviction_prelim": conv_label_prelim,
             "weak_setup_max_rr": weak_max_rr,
             "held_missing": held_missing,
+            "quote_age_min": round(quote_age, 1) if quote_age is not None else None,
         }
     except Exception as e:
         if verbose:
-            print(f"  ⚠️ Ticker indisponible: {e}", flush=True)
+            print(f"  ⚠️ Ticker indisponible: {type(e).__name__}: {e}", flush=True)
         reject_stats["exception"] = reject_stats.get("exception", 0) + 1
         return None
 
@@ -2063,11 +2233,12 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
             if not hist.empty and len(hist) > 0:
                 price = hist["Close"].iloc[-1]
             else:
-                reject_stats["exception"] = reject_stats.get("exception", 0) + 1
+                reject_stats["data_missing"] = reject_stats.get("data_missing", 0) + 1
                 return None
         if price < PRICE_MIN_ETFS or price > PRICE_MAX_ETFS:
             reject_stats["price_limits"] = reject_stats.get("price_limits", 0) + 1
             return None
+        quote_age = _quote_age_minutes(info)
         bid = info.get("bid")
         ask = info.get("ask")
         spread_pct = 0.0
@@ -2078,13 +2249,13 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
                 reject_stats["spread"] = reject_stats.get("spread", 0) + 1
                 return None
         if hist.empty or len(hist) < 2:
-            reject_stats["exception"] = reject_stats.get("exception", 0) + 1
+            reject_stats["data_missing"] = reject_stats.get("data_missing", 0) + 1
             return None
         closes = hist["Close"]
         volumes = hist["Volume"]
         prev_close = closes.iloc[-2]
         if not prev_close:
-            reject_stats["exception"] = reject_stats.get("exception", 0) + 1
+            reject_stats["data_missing"] = reject_stats.get("data_missing", 0) + 1
             return None
         gap = ((price - prev_close) / prev_close) * 100
         volume = info.get("volume", 0)
@@ -2119,7 +2290,8 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
             reject_stats["price_limits"] = reject_stats.get("price_limits", 0) + 1
             return None
 
-        if vol_ratio > 0.3:
+        etf_vol_deferred = bool(ROBUST_CONFIG.get("rvol_for_volume_signals", False))
+        if not etf_vol_deferred and vol_ratio > 0.3:
             score += 1
         if aum > 50_000_000 or aum == 0:
             score += 1
@@ -2138,7 +2310,7 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
         # v4.4 — P2 : filtre de score AVANT le téléchargement de structure 5 min
         timing_pen = get_timing_penalty()
         effective_score_min = min(5, SCORE_MIN_ETFS + regime.get("score_min_etf_adj", 0) + timing_pen)
-        if score < effective_score_min:
+        if score + (1 if etf_vol_deferred else 0) < effective_score_min:
             reject_stats["score"] = reject_stats.get("score", 0) + 1
             return None
 
@@ -2156,9 +2328,18 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
                 reject_stats["rvol"] = reject_stats.get("rvol", 0) + 1
                 return None
 
+        vol_signal = vol_ratio
+        if etf_vol_deferred:
+            if rvol is None or rvol >= INTRADAY_FILTERS.get("rvol_weak_threshold", 0.8):
+                score += 1
+            vol_signal = rvol if rvol is not None else vol_ratio
+            if score < effective_score_min:
+                reject_stats["score"] = reject_stats.get("score", 0) + 1
+                return None
+
         exchange = get_exchange(info)
-        confidence = get_confidence_score(score, vol_ratio, gap, "Large Cap")
-        inst_score, inst_details = calculate_institutional_interest(info, price, vol_ratio, gap, direction)
+        confidence = get_confidence_score(score, vol_signal, gap, "Large Cap")
+        inst_score, inst_details = calculate_institutional_interest(info, price, vol_signal, gap, direction)
         hist_1m = fetch_intraday_1m(ticker)
         vwap, poc = compute_vwap_poc(hist_1m)
         if vwap is None or poc is None:
@@ -2197,7 +2378,7 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
         held_missing = inst_details.get("held_missing", False)
         held_pct = 0.5 if held_missing else inst_details.get("held", 0.5)
         tp_ref_adj, trail_adj = adjust_risk_with_factors(
-            tp_ref, spread_pct, vol_ratio, "Large Cap", gap, held_pct
+            tp_ref, spread_pct, vol_signal, "Large Cap", gap, held_pct
         )
         if direction == "SHORT":
             trail_adj += SHORT_TRAIL_WIDENING
@@ -2220,7 +2401,7 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
         l2_label = l2_result["label"]
 
         conv_label_prelim, _ = calculate_conviction(
-            direction, gap, vol_ratio, vwap, price, inst_score,
+            direction, gap, vol_signal, vwap, price, inst_score,
             regime.get("bias", "⚪ Neutral"), poc, l2_score
         )
         tp_ref_adj, tp_calib_trace = apply_tp_calibration(
@@ -2305,7 +2486,7 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
 
         return {
             "ticker": ticker, "exchange": exchange, "price": price, "gap": gap,
-            "score": score, "vol_ratio": vol_ratio,
+            "score": score, "vol_ratio": vol_signal, "vol_ratio_raw": vol_ratio,
             "aum_m": round(aum / 1_000_000, 1) if aum else 0,
             "confidence": confidence, "spread_pct": spread_pct, "direction": direction,
             "tp_mult": round(tp_mult, 3), "sl_mult": round(sl_mult, 3),
@@ -2327,9 +2508,10 @@ def analyze_etf(ticker, regime=None, reject_stats=None):
             "conviction_prelim": conv_label_prelim,
             "weak_setup_max_rr": weak_max_rr,
             "held_missing": held_missing,
+            "quote_age_min": round(quote_age, 1) if quote_age is not None else None,
         }
     except Exception as e:
-        print(f"  ⚠️ ETF indisponible ({ticker}): {e}", flush=True)
+        print(f"  ⚠️ ETF indisponible ({ticker}): {type(e).__name__}: {e}", flush=True)
         reject_stats["exception"] = reject_stats.get("exception", 0) + 1
         return None
 
@@ -2345,6 +2527,39 @@ def calculate_quantity(entry, stop, capital, risk_pct, max_cap_pct):
 
 def format_price(p):
     return f"{p:.2f}"
+
+def compute_position_size_pct(verdict, conviction, rank="1/1"):
+    """v4.6 — palier de taille (% de la quantité maximale autorisée).
+    Le VERDICT fixe le palier ; une CONVICTION Low retire un cran ; un RANK 2/2
+    est plafonné. Indépendant du régime, du biais de marché et de la direction."""
+    cfg = SIZING_CONFIG
+    if not cfg.get("enabled", True):
+        return 100.0, "sizing désactivé"
+    tiers = [float(x) for x in cfg.get("tiers_pct", [33, 67, 100])]
+    idx = {"Mixed": 0, "Favorable": 1, "Strong": 2}.get(verdict, 0)
+    reason = verdict
+    if conviction == "Low":
+        idx = max(0, idx - int(cfg.get("low_conviction_notches", 1)))
+        reason += " + Low conviction"
+    pct = tiers[min(idx, len(tiers) - 1)]
+    try:
+        rank_pos = int(str(rank).split("/")[0])
+    except Exception:
+        rank_pos = 1
+    cap = float(cfg.get("rank2_cap_pct", 67))
+    if rank_pos >= 2 and pct > cap:
+        pct = cap
+        reason += f" + rank {rank}"
+    return pct, reason
+
+def _grade(data, bias):
+    """VERDICT et CONVICTION d'un candidat (mêmes calculs que le message Telegram)."""
+    verdict = get_verdict(data["confidence"])[0]
+    conv, _ = calculate_conviction(
+        data["direction"], data["gap"], data["vol_ratio"], data.get("vwap"), data["price"],
+        data["inst_interest"], bias, data.get("poc"), data.get("synthetic_l2_score", 50)
+    )
+    return verdict, conv
 
 def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1", regime=None):
     if regime is None:
@@ -2368,7 +2583,7 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1", regi
         gain_display = f"-{tp_pct:.1f}%"
         loss_display = f"+{sl_pct:.1f}%"
 
-    qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
+    base_qty = calculate_quantity(entry, sl, CAPITAL, RISK_PER_TRADE, MAX_CAPITAL_PER_POSITION)
     unit_label = "shares" if not is_etf else "units"
 
     if direction == "LONG":
@@ -2400,6 +2615,12 @@ def build_setup_message(data, is_etf=False, bias="⚪ Neutral", rank="1/1", regi
         data.get("poc"),
         data.get("synthetic_l2_score", 50),
     )
+
+    # v4.6 — Q1/Q2 : quantité = palier x quantité maximale autorisée
+    size_pct, size_reason = compute_position_size_pct(verdict_text, conv_label, rank)
+    qty = int(base_qty * size_pct / 100.0)
+    if base_qty > 0:
+        qty = max(1, qty)
 
     regime_name = regime.get("regime", "Unknown")
     volatility = regime.get("volatility", "Normal")
@@ -2462,15 +2683,20 @@ def _reset_reject_stats():
     return {
         "price_limits": 0, "spread": 0, "gap": 0, "vol_ratio": 0,
         "rvol": 0, "score": 0, "sl": 0, "tp": 0, "rr_min": 0,
-        "fees": 0, "atr_cap": 0, "direction": 0, "exception": 0, "vwap_na": 0,
+        "fees": 0, "atr_cap": 0, "direction": 0, "exception": 0, "data_missing": 0,
+        "vwap_na": 0, "na_float": 0, "na_beta": 0, "na_short_ratio": 0,
     }
 
 def _print_reject_stats(stats, label):
-    non_zero = {k: v for k, v in stats.items() if v > 0}
-    if not non_zero:
-        return
-    detail = " ".join(f"{k}={v}" for k, v in non_zero.items())
-    print(f"  📊 Rejets {label}: {detail}", flush=True)
+    info_keys = {"vwap_na", "na_float", "na_beta", "na_short_ratio"}
+    rej = {k: v for k, v in stats.items() if v > 0 and k not in info_keys}
+    gaps = {k: v for k, v in stats.items() if v > 0 and k in info_keys}
+    if rej:
+        detail = " ".join(f"{k}={v}" for k, v in rej.items())
+        print(f"  📊 Rejets {label}: {detail}", flush=True)
+    if gaps:
+        detail = " ".join(f"{k}={v}" for k, v in gaps.items())
+        print(f"  📉 Données manquantes {label} (non-rejets): {detail}", flush=True)
 
 def _select_best_per_direction(stocks_results, etfs_results, market_bias):
     """v4.1 — F3 (legacy, non utilisée depuis v4.2).
@@ -2561,6 +2787,169 @@ def _select_top_candidates_with_diversity_rules(stocks_results, etfs_results, ma
     )
     return [(best, best_is_etf)]
 
+def requote_selected(selected_items):
+    """v4.5 — re-cote les setups retenus juste avant l'envoi (au plus 2 appels).
+    N'altère ni l'entrée ni le SL/TP : renseigne price_now / drift_pct pour
+    que le log signale une dérive de prix depuis le scan (le message Telegram est inchangé)."""
+    if not ROBUST_CONFIG.get("requote_before_send", True):
+        return
+    for data, _is_etf in selected_items:
+        try:
+            info = yf.Ticker(data["ticker"], session=HTTP_SESSION).info
+            p = info.get("regularMarketPrice") or info.get("currentPrice")
+            if p and data.get("price", 0) > 0:
+                data["price_now"] = float(p)
+                data["drift_pct"] = (float(p) - data["price"]) / data["price"] * 100.0
+        except Exception:
+            _note_error("requote")
+
+def _fmt_min(total):
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+def wait_until_minute(target_total_min):
+    """v4.5 — attend jusqu'à l'heure cible (minutes depuis minuit, heure de
+    Montréal). Contrairement à wait_until_target, ne reporte JAMAIS la cible
+    de 60 minutes quand elle est déjà passée."""
+    now = datetime.now(MONTREAL_TZ)
+    cur = now.hour * 60 + now.minute
+    print(f"⏳ Attente jusqu'à {_fmt_min(target_total_min)}... ({target_total_min - cur} min)", flush=True)
+    last_heartbeat = datetime.now(MONTREAL_TZ)
+    while True:
+        now = datetime.now(MONTREAL_TZ)
+        if now.hour * 60 + now.minute >= target_total_min:
+            return
+        time.sleep(30)
+        now = datetime.now(MONTREAL_TZ)
+        if (now - last_heartbeat).total_seconds() >= 300:
+            remaining = target_total_min - (now.hour * 60 + now.minute)
+            print(f"💤 ... encore {remaining} min avant {_fmt_min(target_total_min)}", flush=True)
+            last_heartbeat = now
+
+def run_scan(now, session):
+    """v4.5 — un scan complet, extrait de main() pour pouvoir être isolé par un
+    try/except : une erreur ici n'empêche plus les créneaux suivants."""
+    print(f"\n📊 Scan à {now.strftime('%H:%M')} (session {session})", flush=True)
+    t_scan0 = time.time()
+    _reset_data_errors()
+
+    print("\n🧭 ================================", flush=True)
+    print("🧭 DÉTECTION DE RÉGIME DE MARCHÉ", flush=True)
+    print("🧭 ================================", flush=True)
+    regime = detect_market_regime(verbose=True)
+    market_bias = regime["bias"]
+    t_regime = time.time()
+    n_rss = refresh_rss_cache()
+    print(f"📰 Cache RSS : {n_rss} articles < 6 h", flush=True)
+
+    stocks_reject = _reset_reject_stats()
+    stocks_results = []
+    for ticker in STOCK_TICKERS:
+        print(f"  - {ticker}:", flush=True)
+        data = analyze_stock(ticker, regime=regime, verbose=True, reject_stats=stocks_reject)
+        if data:
+            stocks_results.append(data)
+            l2_display = f"L2:{data.get('synthetic_l2_score', 50):.0f}"
+            print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')} | {l2_display}", flush=True)
+        else:
+            print("    ❌", flush=True)
+    _print_reject_stats(stocks_reject, "STOCKS")
+    t_stocks = time.time()
+
+    etfs_reject = _reset_reject_stats()
+    etfs_results = []
+    for ticker in ETF_TICKERS:
+        print(f"  - {ticker}...", end=" ", flush=True)
+        data = analyze_etf(ticker, regime=regime, reject_stats=etfs_reject)
+        if data:
+            etfs_results.append(data)
+            l2_display = f"L2:{data.get('synthetic_l2_score', 50):.0f}"
+            print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')} | {l2_display}", flush=True)
+        else:
+            print("❌", flush=True)
+    _print_reject_stats(etfs_reject, "ETFS")
+    t_etfs = time.time()
+    _print_data_errors()
+
+    ages = sorted(r["quote_age_min"] for r in (stocks_results + etfs_results) if r.get("quote_age_min") is not None)
+    if ages:
+        print(f"🕒 Âge des cotes (candidats) : min {ages[0]:.0f} | médiane {ages[len(ages)//2]:.0f} | max {ages[-1]:.0f} min", flush=True)
+
+    print(f"🧠 SYNTHETIC L2 déjà intégré au pipeline (calculé pré-calibration TP).", flush=True)
+
+    # v4.3 — F5 : sélection top-down stricte avec règles de diversité
+    selected_items = _select_top_candidates_with_diversity_rules(
+        stocks_results, etfs_results, market_bias
+    )
+    requote_selected(selected_items)   # v4.5 — R6
+    for _d, _e in selected_items:      # v4.7 : information dans les LOGS uniquement (messages Telegram inchangés)
+        _age, _dr = _d.get("quote_age_min"), _d.get("drift_pct")
+        if _age is None and _dr is None:
+            continue
+        _flags = []
+        if _age is not None and _age >= ROBUST_CONFIG.get("quote_warn_after_min", 20):
+            _flags.append(f"cote âgée de {_age:.0f} min")
+        if _dr is not None and abs(_dr) >= ROBUST_CONFIG.get("drift_warn_pct", 0.30):
+            _flags.append(f"dérive {_dr:+.2f}% depuis le scan (prix actuel {_d.get('price_now', 0):.2f})")
+        _age_txt = f"{_age:.0f} min" if _age is not None else "n/d"
+        _dr_txt = f"{_dr:+.2f}%" if _dr is not None else "n/d"
+        print(f"  🕒 {_d['ticker']}: âge de cote {_age_txt} | dérive depuis le scan {_dr_txt}" + (" ⚠️ " + ", ".join(_flags) if _flags else ""), flush=True)
+
+    # v4.6 — Q3 : répartition Verdict x Conviction des candidats (calibration)
+    grades = {}
+    tiers = {}
+    for cand in stocks_results + etfs_results:
+        v, c = _grade(cand, market_bias)
+        grades[f"{v}/{c}"] = grades.get(f"{v}/{c}", 0) + 1
+        pct, _r = compute_position_size_pct(v, c, "1/1")
+        tiers[f"{pct:.0f}%"] = tiers.get(f"{pct:.0f}%", 0) + 1
+    if grades:
+        print("📈 Candidats par Verdict/Conviction : " + " ".join(f"{k}={n}" for k, n in sorted(grades.items())), flush=True)
+        print("📐 Paliers de taille (rang 1/1) : " + " ".join(f"{k}={n}" for k, n in sorted(tiers.items(), reverse=True)), flush=True)
+
+    now_scan = datetime.now(MONTREAL_TZ)
+    header = (
+        "🤖 <b>NorthSentinel CA Only</b>™\n"
+        "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
+        f"📅 {now_scan.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
+        f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
+        "═══════════════════════\n\n"
+    )
+    msg = header
+
+    if selected_items:
+        total_selected = len(selected_items)
+        for idx, (selected, is_etf) in enumerate(selected_items, start=1):
+            rank = f"{idx}/{total_selected}"
+            msg += build_setup_message(
+                selected, is_etf=is_etf, bias=market_bias, rank=rank, regime=regime
+            )
+            _v, _c = _grade(selected, market_bias)
+            _pct, _why = compute_position_size_pct(_v, _c, rank)
+            print(f"  📐 {selected['ticker']}: {_why} / conviction {_c} / rang {rank} → taille {_pct:.0f}%", flush=True)
+            if idx < total_selected:
+                msg += "\n"
+    else:
+        regime_name = regime.get("regime", "Unknown")
+        volatility = regime.get("volatility", "Normal")
+        adx = regime.get("adx")
+        adx_display = f"{adx:.1f}" if isinstance(adx, (int, float)) else "N/A"
+        msg += "ℹ️ <b>No valid setup for this scan.</b>\n"
+        msg += f"  🧭 Regime: {regime_name} | Vol: {volatility} | ADX: {adx_display}\n"
+        msg += f"  Market Bias: {market_bias}\n"
+        msg += f"  Tickers evaluated: {len(STOCK_TICKERS)} stocks, {len(ETF_TICKERS)} ETFs\n"
+        msg += "  All candidates rejected by filters (gap, RVOL, structure SL, structural TP, minimum R/R, or IBKR fee coverage).\n"
+
+    msg += "\n━━━━━━━━━━━━━━━━━\n\n"
+    msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
+    send_telegram(msg)
+    t_end = time.time()
+    print(
+        f"⏱️ Durée scan : régime {t_regime - t_scan0:.0f}s | stocks (+RSS) {t_stocks - t_regime:.0f}s | "
+        f"ETFs {t_etfs - t_stocks:.0f}s | sélection+Telegram {t_end - t_etfs:.0f}s | "
+        f"TOTAL {t_end - t_scan0:.0f}s",
+        flush=True
+    )
+
 def main():
     now = datetime.now(MONTREAL_TZ)
     heure = now.hour
@@ -2577,15 +2966,11 @@ def main():
 
     if 9 <= heure <= 11 and (heure < 11 or minute <= 35):
         session = "morning"
-        start_hour, start_min = 9, 30
-        end_hour, end_min = 11, 20
         scan_hours = [9, 10, 11]
         scan_minutes = [45, 30, 15]
         print("☀️ Session MATIN détectée – Scans à 09:45, 10:30, 11:15.", flush=True)
-    elif 14 <= heure <= 15 and (heure < 15 or minute <= 5):
+    elif 14 <= heure <= 15 and (heure < 15 or minute <= 15):
         session = "afternoon"
-        start_hour, start_min = 14, 0
-        end_hour, end_min = 15, 0
         if early_close and early_hour is not None and early_hour <= 14:
             print(f"🌙 Session PM annulée – early close à {early_hour}:00 ET.", flush=True)
             if IS_MANUAL_RUN:
@@ -2615,136 +3000,57 @@ def main():
             send_telegram(msg)
         return
 
-    now = datetime.now(MONTREAL_TZ)
-    if now.hour < start_hour or (now.hour == start_hour and now.minute < start_min):
-        wait_until_target(start_hour, start_min)
+    # v4.5 — R5 : planification par créneaux avec rattrapage
+    slots = [h * 60 + m for h, m in zip(scan_hours, scan_minutes)]
+    grace = int(SCHED_CONFIG.get("catchup_grace_min", 12))
+    done = set()
+    print(f"🗓️ Créneaux : {', '.join(_fmt_min(x) for x in slots)} (rattrapage jusqu'à {grace} min de retard)", flush=True)
 
     while True:
         now = datetime.now(MONTREAL_TZ)
+        cur = now.hour * 60 + now.minute
 
-        if now.hour > end_hour or (now.hour == end_hour and now.minute > end_min):
-            print(f"⏹️ Fin de session ({end_hour:02d}:{end_min:02d}) – Arrêt.", flush=True)
-            send_session_end_message(now, session)
-            break
-
-        current_hour, current_min = now.hour, now.minute
-
-        is_scan_time = False
-        current_total = current_hour * 60 + current_min
-        for h, m in zip(scan_hours, scan_minutes):
-            slot_total = h * 60 + m
-            if 0 <= current_total - slot_total <= 5:
-                is_scan_time = True
-                break
-
-        if is_scan_time:
-            print(f"\n📊 Scan à {now.strftime('%H:%M')} (session {session})", flush=True)
-            t_scan0 = time.time()
-
-            print("\n🧭 ================================", flush=True)
-            print("🧭 DÉTECTION DE RÉGIME DE MARCHÉ", flush=True)
-            print("🧭 ================================", flush=True)
-            regime = detect_market_regime(verbose=True)
-            market_bias = regime["bias"]
-            t_regime = time.time()
-            n_rss = refresh_rss_cache()
-            print(f"📰 Cache RSS : {n_rss} articles < 6 h", flush=True)
-
-            stocks_reject = _reset_reject_stats()
-            stocks_results = []
-            for ticker in STOCK_TICKERS:
-                print(f"  - {ticker}:", flush=True)
-                data = analyze_stock(ticker, regime=regime, verbose=True, reject_stats=stocks_reject)
-                if data:
-                    stocks_results.append(data)
-                    l2_display = f"L2:{data.get('synthetic_l2_score', 50):.0f}"
-                    print(f"    ✅ Score {data['score']}/7 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')} | {l2_display}", flush=True)
-                else:
-                    print("    ❌", flush=True)
-            _print_reject_stats(stocks_reject, "STOCKS")
-            t_stocks = time.time()
-
-            etfs_reject = _reset_reject_stats()
-            etfs_results = []
-            for ticker in ETF_TICKERS:
-                print(f"  - {ticker}...", end=" ", flush=True)
-                data = analyze_etf(ticker, regime=regime, reject_stats=etfs_reject)
-                if data:
-                    etfs_results.append(data)
-                    l2_display = f"L2:{data.get('synthetic_l2_score', 50):.0f}"
-                    print(f"✅ Score {data['score']}/5 | {data['direction']} | TP: {data['tp_pct']}% [{data.get('tp_source','')}] | SL: {data['sl_pct']}% | RVOL: {data.get('rvol_intraday')} | {l2_display}", flush=True)
-                else:
-                    print("❌", flush=True)
-            _print_reject_stats(etfs_reject, "ETFS")
-            t_etfs = time.time()
-
-            print(f"🧠 SYNTHETIC L2 déjà intégré au pipeline (calculé pré-calibration TP).", flush=True)
-
-            # v4.3 — F5 : sélection top-down stricte avec règles de diversité
-            selected_items = _select_top_candidates_with_diversity_rules(
-                stocks_results, etfs_results, market_bias
-            )
-
-            now_scan = datetime.now(MONTREAL_TZ)
-            header = (
-                "🤖 <b>NorthSentinel CA Only</b>™\n"
-                "<i>Canadian intraday trading signals. Long & Short. Manual execution.</i>\n"
-                f"📅 {now_scan.strftime('%Y-%m-%d %H:%M')} (Montreal) | Scanned: {len(STOCK_TICKERS)} Stocks, {len(ETF_TICKERS)} ETFs\n"
-                f"Capital: ${CAPITAL:,.0f} (Paper Trading Account)\n"
-                "═══════════════════════\n\n"
-            )
-            msg = header
-
-            if selected_items:
-                total_selected = len(selected_items)
-                for idx, (selected, is_etf) in enumerate(selected_items, start=1):
-                    rank = f"{idx}/{total_selected}"
-                    msg += build_setup_message(
-                        selected, is_etf=is_etf, bias=market_bias, rank=rank, regime=regime
+        for sl in slots:
+            if sl not in done and cur > sl + grace:
+                done.add(sl)
+                print(f"⚠️ Créneau {_fmt_min(sl)} MANQUÉ (il est {now.strftime('%H:%M')}, au-delà de {grace} min de rattrapage).", flush=True)
+                if SCHED_CONFIG.get("notify_missed_slot", False):
+                    send_telegram(
+                        "🤖 <b>NorthSentinel CA Only</b>™\n"
+                        f"<i>⚠️ Scan slot {_fmt_min(sl)} skipped — bot woke up at {now.strftime('%H:%M')} (ET), "
+                        f"beyond the {grace}-min catch-up window.</i>\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "<i>Informational automated signal. Not financial or trading advice.</i>"
                     )
-                    if idx < total_selected:
-                        msg += "\n"
-            else:
-                regime_name = regime.get("regime", "Unknown")
-                volatility = regime.get("volatility", "Normal")
-                adx = regime.get("adx")
-                adx_display = f"{adx:.1f}" if isinstance(adx, (int, float)) else "N/A"
-                msg += "ℹ️ <b>No valid setup for this scan.</b>\n"
-                msg += f"  🧭 Regime: {regime_name} | Vol: {volatility} | ADX: {adx_display}\n"
-                msg += f"  Market Bias: {market_bias}\n"
-                msg += f"  Tickers evaluated: {len(STOCK_TICKERS)} stocks, {len(ETF_TICKERS)} ETFs\n"
-                msg += "  All candidates rejected by filters (gap, RVOL, structure SL, structural TP, minimum R/R, or IBKR fee coverage).\n"
 
-            msg += "\n━━━━━━━━━━━━━━━━━\n\n"
-            msg += "<i>Informational automated signal. Not financial or trading advice.</i>"
-            send_telegram(msg)
-            t_end = time.time()
-            print(
-                f"⏱️ Durée scan : régime {t_regime - t_scan0:.0f}s | stocks (+RSS) {t_stocks - t_regime:.0f}s | "
-                f"ETFs {t_etfs - t_stocks:.0f}s | sélection+Telegram {t_end - t_etfs:.0f}s | "
-                f"TOTAL {t_end - t_scan0:.0f}s",
-                flush=True
-            )
-
-        next_scan_time = None
-        for h, m in zip(scan_hours, scan_minutes):
-            if h > current_hour or (h == current_hour and m > current_min):
-                next_scan_time = (h, m)
-                break
-
-        if next_scan_time is None:
-            print("⏹️ Dernier scan effectué – Fin de session immédiate.", flush=True)
+        pending = [x for x in slots if x not in done]
+        if not pending:
+            print("⏹️ Tous les créneaux sont traités – Fin de session.", flush=True)
             send_session_end_message(now, session)
             break
 
-        target_hour, target_min = next_scan_time
+        nxt = pending[0]
+        if cur < nxt:
+            wait_until_minute(nxt)
+            continue
 
-        if target_hour > end_hour or (target_hour == end_hour and target_min > end_min):
-            print("⏹️ Prochaine cible après la fin de session – Arrêt.", flush=True)
-            send_session_end_message(now, session)
-            break
-
-        wait_until_target(target_hour, target_min)
+        done.add(nxt)
+        late = cur - nxt
+        if late > 0:
+            print(f"🔁 Rattrapage du créneau {_fmt_min(nxt)} (démarrage avec {late} min de retard).", flush=True)
+        try:
+            run_scan(now, session)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"❌ Scan {_fmt_min(nxt)} interrompu : {type(e).__name__}: {e} — passage au créneau suivant.", flush=True)
+            if SCHED_CONFIG.get("notify_scan_failure", False):
+                send_telegram(
+                    "🤖 <b>NorthSentinel CA Only</b>™\n"
+                    f"<i>⚠️ Scan {_fmt_min(nxt)} failed ({type(e).__name__}). The next slot will still run.</i>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "<i>Informational automated signal. Not financial or trading advice.</i>"
+                )
 
 if __name__ == "__main__":
     main()
