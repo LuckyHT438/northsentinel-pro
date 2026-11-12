@@ -12,6 +12,8 @@ import re
 import pytz
 import os
 import subprocess
+import tempfile
+import shutil
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -310,11 +312,9 @@ def send_telegram(message, chat_ids=None):
         print("⚠️ Telegram token missing")
         return False
 
-    # Si aucun destinataire n'est fourni, on utilise le propriétaire (comportement actuel)
     if chat_ids is None:
         chat_ids = [TELEGRAM_CHAT_ID]
 
-    # Si chat_ids est un entier, on le convertit en liste
     if not isinstance(chat_ids, list):
         chat_ids = [chat_ids]
 
@@ -1226,7 +1226,7 @@ def format_capital(amount):
         return f"{amount}$"
 
 # === FONCTION DE SAUVEGARDE INCRÉMENTALE ===
-def save_pro_signal(ticker, signal_type, price, score, gap, vol_ratio, trail_percent, cap_category=None, aum_m=None, market_bias=None, spread_pct=None):
+def save_pro_signal(ticker, signal_type, price, score, gap, vol_ratio, trail_percent, cap_category=None, aum_m=None, market_bias=None, spread_pct=None, session=None):
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         filepath = os.path.join(script_dir, 'pro_signals_today.json')
@@ -1254,6 +1254,8 @@ def save_pro_signal(ticker, signal_type, price, score, gap, vol_ratio, trail_per
             "timestamp": str(timestamp),
             "date": str(today)
         }
+        if session:
+            new_signal["session"] = str(session)
         if cap_category:
             new_signal["cap_category"] = str(cap_category)
         if aum_m is not None:
@@ -1275,6 +1277,67 @@ def save_pro_signal(ticker, signal_type, price, score, gap, vol_ratio, trail_per
         print(f"❌ Erreur sauvegarde Pro: {e}")
         return False
 
+def get_overnight_signals_today():
+    """
+    Lit le dépôt de données et retourne les signaux Overnight validés aujourd'hui.
+    """
+    if not DATA_REPO_TOKEN:
+        print("⚠️ DATA_REPO_TOKEN manquant — impossible de lire les signaux Overnight")
+        return []
+
+    temp_dir = tempfile.mkdtemp(prefix="northsentinel-read-")
+    try:
+        subprocess.run(
+            ["git", "clone", DATA_REPO_URL, temp_dir],
+            check=True,
+            capture_output=True
+        )
+        repo_file = os.path.join(temp_dir, "pro_signals_today.json")
+
+        if not os.path.exists(repo_file):
+            return []
+
+        with open(repo_file, "r") as f:
+            signals = json.load(f)
+
+        if not isinstance(signals, list):
+            return []
+
+        today = datetime.now(MONTREAL_TZ).strftime("%Y-%m-%d")
+        return [
+            s for s in signals
+            if s.get("date") == today
+            and s.get("session") == "OVERNIGHT"
+            and s.get("type") in ("STOCK", "ETF")
+        ]
+    except Exception as e:
+        print(f"❌ Erreur lecture signaux Overnight: {e}")
+        return []
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def send_friday_overnight_reminder():
+    """
+    Envoie un rappel Telegram le vendredi à 19:50 uniquement si
+    le scan Overnight de 15:50 a généré au moins un setup validé.
+    """
+    signals = get_overnight_signals_today()
+
+    if not signals:
+        print("ℹ️ Aucun setup Overnight validé aujourd'hui — rappel vendredi non envoyé")
+        return False
+
+    tickers = ", ".join(sorted({s.get("ticker", "?") for s in signals}))
+
+    message = "⏰ <b>NorthSentinel Pro Reminder</b>\n"
+    message += "The 3:50 PM Overnight scan generated at least one validated setup today.\n"
+    message += f"📌 Setup(s): {tickers}\n"
+    message += "Remember to close the Overnight trade before 8:00 PM.\n"
+    message += "\n<i>Automated message — not financial advice.</i>"
+
+    return send_telegram(message)
+
 def should_save_signal(heure, minute):
     if heure == 10 and 0 <= minute <= 2:
         return True
@@ -1295,6 +1358,12 @@ def main():
     jour = now_mtl.weekday()
     heure = now_mtl.hour
     minute = now_mtl.minute
+
+    # === RAPPEL VENDREDI 19:50 — CLÔTURE DES TRADES OVERNIGHT ===
+    if jour == 4 and heure == 19 and minute == 50:
+        print("⏰ Vendredi 19:50 — vérification du rappel Overnight...")
+        send_friday_overnight_reminder()
+        return
     
     market_status = is_market_closed()
     if market_status == 'closed':
@@ -1315,7 +1384,7 @@ def main():
     print(f"🌍 Global Market Bias: {global_bias}")
     
     # === MODE OVERNIGHT CHECK ===
-    if jour in [0,1,2,3] and heure == 15 and minute >= 55:
+    if jour in [0,1,2,3,4] and heure == 15 and 50 <= minute <= 54:
         tomorrow = now_mtl.date() + timedelta(days=1)
         tomorrow_dt = datetime(tomorrow.year, tomorrow.month, tomorrow.day)
         tomorrow_status = is_market_closed(tomorrow_dt)
@@ -1497,7 +1566,8 @@ def main():
                     trail_percent=trail_pct,
                     cap_category=b.get('cap_category', None),
                     market_bias=b.get('market_bias'),
-                    spread_pct=spread_pct
+                    spread_pct=spread_pct,
+                    session="OVERNIGHT"
                 )
         else:
             message += f"❌ No Valid Stock for Overnight\n"
@@ -1574,7 +1644,8 @@ def main():
                     trail_percent=trail_pct,
                     aum_m=b.get('aum_m', None),
                     market_bias=b.get('market_bias'),
-                    spread_pct=spread_pct
+                    spread_pct=spread_pct,
+                    session="OVERNIGHT"
                 )
         else:
             message += f"❌ No Valid ETF for Overnight\n"
