@@ -35,6 +35,9 @@ DATA_REPO_URL = "https://x-access-token:{}@github.com/LuckyHT438/northsentinel-d
 # === SEUIL DE SPREAD MAXIMUM (5%) ===
 MAX_SPREAD_PCT = 5.0
 
+# === TRACKER DE RAISON DE REJET (pour logs complets) ===
+_last_reject_reason = [""]
+
 def push_signals_to_repo():
     """
     Clone le dépôt, fusionne les signaux locaux avec ceux du dépôt,
@@ -995,120 +998,119 @@ def calculate_rsi(prices, period=14):
 def get_stock_data(ticker, rate_limited_flag):
     now_mtl = datetime.now(MONTREAL_TZ)
     market_status = is_market_closed()
-    
+
+    _last_reject_reason[0] = ""
+
     if ticker not in canadian_symbols and market_status in ('closed', 'us_closed'):
+        _last_reject_reason[0] = "Market closed (US)"
         return None
     if ticker in canadian_symbols and market_status in ('closed', 'ca_closed'):
+        _last_reject_reason[0] = "Market closed (CA)"
         return None
-    
+
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         time.sleep(random.uniform(0.3, 0.5))
         if not info or (info.get('regularMarketPrice') is None and info.get('currentPrice') is None):
-            if info.get('message') and 'rate' in str(info.get('message','')).lower():
-                print(f"\n⚠️ RATE LIMIT detected - Pausing")
+            if info.get('message') and 'rate' in str(info.get('message', '')).lower():
+                _last_reject_reason[0] = "Rate limited"
                 rate_limited_flag[0] = True
                 return None
-        
-        # Récupérer bid / ask
+            _last_reject_reason[0] = "No price data"
+            return None
+
         bid = info.get('bid')
         ask = info.get('ask')
         price = info.get('currentPrice') or info.get('regularMarketPrice')
-        
-        # Si bid/ask disponibles et différents de zéro, calculer le spread
+
         spread_pct = 0.0
         if bid and ask and bid > 0 and ask > 0:
             mid = (bid + ask) / 2.0
             spread_pct = ((ask - bid) / mid) * 100.0
             if spread_pct > MAX_SPREAD_PCT:
-                print(f"❌ Spread trop élevé: {spread_pct:.2f}% (limite {MAX_SPREAD_PCT}%)")
+                _last_reject_reason[0] = f"Spread {spread_pct:.2f}% (> {MAX_SPREAD_PCT}%)"
                 return None
-            # Pour un ordre d'achat, on utilise le ask comme prix d'entrée
             if spread_pct > 0.3:
                 price = ask
-        
+
         if not price:
+            _last_reject_reason[0] = "No price"
             return None
-        
+
         if now_mtl.hour == 9 and now_mtl.minute < 30:
             pre_market = info.get('preMarketPrice')
             if pre_market and pre_market > 0:
                 price = pre_market
-        
+
         if not price or price < PRICE_MIN_ACTIONS or price > PRICE_MAX_ACTIONS:
+            _last_reject_reason[0] = f"Price ${price} out of [{PRICE_MIN_ACTIONS}-{PRICE_MAX_ACTIONS}]" if price else "No price"
             return None
         prev_close = info.get('previousClose')
         if not prev_close:
+            _last_reject_reason[0] = "No previous close"
             return None
         gap = ((price - prev_close) / prev_close * 100)
-        # 🔧 Utilisation de la variable GAP_MIN définie dans main (portée globale)
-        GAP_MIN = get_gap_min()  # sera écrasée par la valeur calculée dans main
+        GAP_MIN = get_gap_min()
         if gap > 50 or gap < GAP_MIN:
+            _last_reject_reason[0] = f"Gap {gap:.1f}% (< {GAP_MIN}% or > 50%)"
             return None
         volume = info.get('volume', 0)
         is_canadian = ticker in canadian_symbols
         vol_min = 100_000 if is_canadian else 500_000
         if volume < vol_min:
+            _last_reject_reason[0] = f"Volume {volume:,} < {vol_min:,}"
             return None
         avg_volume = info.get('averageVolume', volume)
         vol_ratio = volume / avg_volume if avg_volume > 0 else 1
 
         # === CALCUL DU SCORE AVEC CRITÈRE N°9 ===
         score = 0
-        # 1. Gap
         if 5 <= gap <= 40:
             score += 1
-        # 2. Volume ratio
         if vol_ratio > 1.5:
             score += 1
-        # 3. Float (avec bonus si manquant)
         float_shares = info.get('floatShares')
         if float_shares is not None:
             if float_shares < 50_000_000:
                 score += 1
         else:
-            score += 1  # Bonus car donnée manquante (Critère n°9)
-        # 4. Bêta (avec bonus si manquant)
+            score += 1
         beta = info.get('beta')
         if beta is not None:
             if beta > 1.0:
                 score += 1
         else:
-            score += 1  # Bonus car donnée manquante (Critère n°9)
-        # 5. Short ratio (avec bonus si manquant)
+            score += 1
         short_ratio = info.get('shortRatio')
         if short_ratio is not None:
             if short_ratio > 2:
                 score += 1
         else:
-            score += 1  # Bonus car donnée manquante (Critère n°9)
-        # 6. Prix vs SMA50
+            score += 1
         rsi_50 = info.get('fiftyDayAverage', 0)
         current_close = info.get('regularMarketPreviousClose', price)
         if rsi_50 > 0 and current_close > rsi_50:
             score += 1
-        # 7. News (positive ou négative)
         news = get_news_rss(ticker)
         if news:
             for n in news[:3]:
-                sentiment = analyze_news_sentiment(n.get('title',''))
+                sentiment = analyze_news_sentiment(n.get('title', ''))
                 if sentiment >= 1:
                     score += 1
                     break
                 elif sentiment <= -2:
                     score -= 1
                     break
-        # === FIN CALCUL SCORE ===
 
         if score < SCORE_MIN_ACTIONS:
+            _last_reject_reason[0] = f"Score {score}/9 < {SCORE_MIN_ACTIONS}"
             return None
         exchange = get_exchange_from_info(info)
         cap_category = get_market_cap_category(ticker)
         market_bias = _get_market_bias(ticker)
-        # On appelle get_trail_percent avec spread_pct, mais il sera recalculé dans le main avec confidence
         trail_percent = get_trail_percent(score, is_fnb=False, cap_category=cap_category, market_bias=market_bias, spread_pct=spread_pct)
-        
+
         return {
             'ticker': ticker,
             'exchange': exchange,
@@ -1124,31 +1126,37 @@ def get_stock_data(ticker, rate_limited_flag):
     except Exception as e:
         err_str = str(e)
         if "429" in err_str or "Too Many Requests" in err_str:
-            print(f"\n⚠️ RATE LIMIT YF - Pausing")
+            _last_reject_reason[0] = "Rate limited (YF)"
             rate_limited_flag[0] = True
+        else:
+            _last_reject_reason[0] = f"Error: {err_str[:60]}"
         return None
 
 def analyze_fnb(ticker):
     now_mtl = datetime.now(MONTREAL_TZ)
     market_status = is_market_closed()
-    
+
+    _last_reject_reason[0] = ""
+
     if not ticker.endswith('.TO') and market_status in ('closed', 'us_closed'):
+        _last_reject_reason[0] = "Market closed (US)"
         return None
     if ticker.endswith('.TO') and market_status in ('closed', 'ca_closed'):
+        _last_reject_reason[0] = "Market closed (CA)"
         return None
-    
+
     try:
         stock = yf.Ticker(ticker, session=HTTP_SESSION)
         info = stock.info
         hist = stock.history(period="1mo")
         time.sleep(random.uniform(0.3, 0.5))
         if hist.empty or len(hist) < 2:
+            _last_reject_reason[0] = "No history"
             return None
         closes = hist['Close']
         volumes = hist['Volume']
         price = closes.iloc[-1]
-        
-        # bid/ask pour ETF
+
         bid = info.get('bid')
         ask = info.get('ask')
         spread_pct = 0.0
@@ -1156,28 +1164,26 @@ def analyze_fnb(ticker):
             mid = (bid + ask) / 2.0
             spread_pct = ((ask - bid) / mid) * 100.0
             if spread_pct > MAX_SPREAD_PCT:
-                print(f"❌ Spread trop élevé pour ETF: {spread_pct:.2f}% (limite {MAX_SPREAD_PCT}%)")
+                _last_reject_reason[0] = f"Spread {spread_pct:.2f}% (> {MAX_SPREAD_PCT}%)"
                 return None
             if spread_pct > 0.3:
                 price = ask
-        
+
         if now_mtl.hour == 9 and now_mtl.minute < 30:
             pre_market = info.get('preMarketPrice')
             if pre_market and pre_market > 0:
                 price = pre_market
-        
+
         if not price or price < 0.5 or price > PRICE_MAX_FNB:
+            _last_reject_reason[0] = f"Price ${price} out of [0.5-{PRICE_MAX_FNB}]" if price else "No price"
             return None
         prev_close = closes.iloc[-2]
         volume = volumes.iloc[-1] if len(volumes) > 0 else 0
         avg_volume = volumes.mean() if len(volumes) > 0 else volume
         if not prev_close:
+            _last_reject_reason[0] = "No previous close"
             return None
         gap = ((price - prev_close) / prev_close * 100)
-        # Utilisation du gap_min pour les ETFs (on utilise la même fonction)
-        GAP_MIN = get_gap_min()
-        # Pour les ETFs, on utilise le critère 0.5 <= gap <= 8 (pas de gap min ajusté par bias)
-        # On garde cette logique.
         crit_gap = 0.5 <= gap <= 8
         vol_ratio = volume / avg_volume if avg_volume > 0 else 1
         crit_vol = vol_ratio > 0.9
@@ -1195,11 +1201,12 @@ def analyze_fnb(ticker):
             crit_sma = price > 0.70 * sma20
         score = sum([crit_gap, crit_vol, crit_aum, crit_rsi, crit_sma])
         if score < SCORE_MIN_FNB:
+            _last_reject_reason[0] = f"Score {score}/5 < {SCORE_MIN_FNB}"
             return None
         exchange = get_exchange_from_info(info)
         market_bias = _get_market_bias(ticker)
         trail_percent = get_trail_percent(score, is_fnb=True, market_bias=market_bias, spread_pct=spread_pct)
-        
+
         return {
             'ticker': ticker,
             'exchange': exchange,
@@ -1207,14 +1214,15 @@ def analyze_fnb(ticker):
             'gap': gap,
             'score': score,
             'vol_ratio': vol_ratio,
-            'aum_m': aum/1_000_000 if aum else 0,
+            'aum_m': aum / 1_000_000 if aum else 0,
             'rsi': rsi,
             'sma20': sma20,
             'trail_percent': trail_percent,
             'market_bias': market_bias,
             'spread_pct': spread_pct
         }
-    except:
+    except Exception as e:
+        _last_reject_reason[0] = f"Error: {str(e)[:60]}"
         return None
 
 def format_capital(amount):
@@ -1351,6 +1359,34 @@ def should_save_signal(heure, minute):
         return True
     return False
 
+# === HELPERS DE LOG COMPLET ===
+def _log_stock_line(ticker, data, idx, total):
+    """Log complet pour un stock validé (ou score suffisant)."""
+    print(
+        f"[STOCK {idx}/{total}] {ticker}... ✅ "
+        f"{data['exchange']} | ${data['price']:.2f} | "
+        f"Gap {data['gap']:.1f}% | Vol x{data['vol_ratio']:.1f} | "
+        f"Spread {data.get('spread_pct', 0.0):.2f}% | "
+        f"{data.get('cap_category', 'N/A')} | "
+        f"{data.get('market_bias', '')} | "
+        f"Score {data['score']}/9"
+    )
+
+
+def _log_etf_line(ticker, data, idx, total):
+    """Log complet pour un ETF validé (ou score suffisant)."""
+    rsi_display = f"{data['rsi']:.1f}" if data.get('rsi') is not None else "N/A"
+    print(
+        f"[ETF {idx}/{total}] {ticker}... ✅ "
+        f"{data['exchange']} | ${data['price']:.2f} | "
+        f"Gap {data['gap']:.2f}% | Vol x{data['vol_ratio']:.2f} | "
+        f"AUM {data.get('aum_m', 0):.1f}M$ | "
+        f"RSI {rsi_display} | "
+        f"Spread {data.get('spread_pct', 0.0):.2f}% | "
+        f"{data.get('market_bias', '')} | "
+        f"Score {data['score']}/5"
+    )
+
 # === MAIN ===
 def main():
     START_TIME = time.time()
@@ -1421,16 +1457,17 @@ def main():
             if time.time() - START_TIME > 120:
                 print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_actions)} stocks processed")
                 break
-            print(f"[STOCK {i+1}/{len(tickers_actions)}] {ticker}...", end=" ")
             data = get_stock_data(ticker, rate_limited_flag)
             analysed_actions = i + 1
             if data and data['score'] >= SCORE_MIN_OVERNIGHT_ACTIONS:
                 buys_actions.append(data)
-                print(f"✅ Score: {data['score']}/9")
+                _log_stock_line(ticker, data, i + 1, len(tickers_actions))
             elif data:
-                print(f"❌ Score insufficient: {data['score']}/9")
+                _log_stock_line(ticker, data, i + 1, len(tickers_actions))
+                print(f"   ❌ Score {data['score']}/9 < {SCORE_MIN_OVERNIGHT_ACTIONS} (Overnight)")
             else:
-                print("❌")
+                reason = _last_reject_reason[0] or "Rejected"
+                print(f"[STOCK {i+1}/{len(tickers_actions)}] {ticker}... ❌ {reason}")
             if rate_limited_flag[0]:
                 print("⏸️ Rate limit pause 15s...")
                 time.sleep(15)
@@ -1446,16 +1483,17 @@ def main():
             if time.time() - START_TIME > 180:
                 print(f"\n⚠️ TIMEOUT 180s - {i}/{len(tickers_fnb)} ETFs processed")
                 break
-            print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}...", end=" ")
             data = analyze_fnb(ticker)
             analysed_fnb = i + 1
             if data and data['score'] >= SCORE_MIN_OVERNIGHT_FNB:
                 buys_fnb.append(data)
-                print(f"✅ Score: {data['score']}/5")
+                _log_etf_line(ticker, data, i + 1, len(tickers_fnb))
             elif data:
-                print(f"❌ Score insufficient: {data['score']}/5")
+                _log_etf_line(ticker, data, i + 1, len(tickers_fnb))
+                print(f"   ❌ Score {data['score']}/5 < {SCORE_MIN_OVERNIGHT_FNB} (Overnight)")
             else:
-                print("❌")
+                reason = _last_reject_reason[0] or "Rejected"
+                print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}... ❌ {reason}")
         
         elapsed = time.time() - START_TIME
         
@@ -1699,17 +1737,18 @@ def main():
         if time.time() - START_TIME > 120:
             print(f"\n⚠️ TIMEOUT 120s - {i}/{len(tickers_actions)} stocks processed")
             break
-        print(f"[STOCK {i+1}/{len(tickers_actions)}] {ticker}...", end=" ")
         data = get_stock_data(ticker, rate_limited_flag)
         analysed_actions = i + 1
         if data:
             if post_news and data['score'] < current_score_min_actions:
-                print("❌ (score < post-news min)")
+                _log_stock_line(ticker, data, i + 1, len(tickers_actions))
+                print(f"   ❌ Score {data['score']}/9 < {current_score_min_actions} (post-news)")
             else:
                 buys_actions.append(data)
-                print(f"✅ Score: {data['score']}/9")
+                _log_stock_line(ticker, data, i + 1, len(tickers_actions))
         else:
-            print("❌")
+            reason = _last_reject_reason[0] or "Rejected"
+            print(f"[STOCK {i+1}/{len(tickers_actions)}] {ticker}... ❌ {reason}")
         if rate_limited_flag[0]:
             print("⏸️ Rate limit pause 15s...")
             time.sleep(15)
@@ -1725,17 +1764,18 @@ def main():
         if time.time() - START_TIME > 180:
             print(f"\n⚠️ TIMEOUT 180s - {i}/{len(tickers_fnb)} ETFs processed")
             break
-        print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}...", end=" ")
         data = analyze_fnb(ticker)
         analysed_fnb = i + 1
         if data:
             if post_news and data['score'] < current_score_min_fnb:
-                print("❌ (score < post-news min)")
+                _log_etf_line(ticker, data, i + 1, len(tickers_fnb))
+                print(f"   ❌ Score {data['score']}/5 < {current_score_min_fnb} (post-news)")
             else:
                 buys_fnb.append(data)
-                print(f"✅ Score: {data['score']}/5")
+                _log_etf_line(ticker, data, i + 1, len(tickers_fnb))
         else:
-            print("❌")
+            reason = _last_reject_reason[0] or "Rejected"
+            print(f"[ETF {i+1}/{len(tickers_fnb)}] {ticker}... ❌ {reason}")
     
     elapsed = time.time() - START_TIME
     
